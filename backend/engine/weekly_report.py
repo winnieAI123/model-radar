@@ -42,24 +42,6 @@ def _iso_week(dt: datetime | None = None) -> str:
     return f"{y}-W{w:02d}"
 
 
-SEV_COLOR = {"P0": "#b91c1c", "P1": "#d97706", "P2": "#6b7280"}
-CHANGE_COLOR = {"NEW": "#22c55e"}  # ↑/↓ 动态着色在渲染时处理
-
-
-def _change_style(change: str | None) -> str:
-    if not change:
-        return ""
-    if change == "NEW":
-        return "background:#22c55e;color:white;"
-    if change == "—":
-        return "background:#e5e7eb;color:#6b7280;"
-    if change.startswith("↑"):
-        return "background:#dcfce7;color:#166534;"
-    if change.startswith("↓"):
-        return "background:#fee2e2;color:#b91c1c;"
-    return "background:#e5e7eb;color:#6b7280;"
-
-
 # --------------------------- 数据采集（保留原有）---------------------------
 
 def _gather_events(period_start_iso: str, limit: int = 20) -> list[dict]:
@@ -140,498 +122,406 @@ def _gather_source_stats(period_start_iso: str, events: list[dict] | None = None
             "total_events": len(events) if events is not None else 0}
 
 
-# --------------------------- HTML 渲染 ---------------------------
 
-def _render_event_row(e: dict) -> str:
-    detail = {}
-    try:
-        detail = json.loads(e.get("detail_json") or "{}")
-    except Exception:
-        pass
-    link = detail.get("url") or detail.get("html_url") or ""
-    link_html = (
-        f'<div style="margin-top:4px;"><a href="{escape(link)}" '
-        f'style="color:#1a7fd4;text-decoration:none;font-size:12px;">🔗 查看</a></div>'
-        if link else ""
-    )
-    sev = e.get("severity") or "P2"
-    color = SEV_COLOR.get(sev, "#6b7280")
-    return f"""
-    <tr><td style="padding:12px 18px;border-bottom:1px solid #eee;">
-      <span style="display:inline-block;background:{color};color:white;font-size:11px;
-                   padding:2px 8px;border-radius:3px;font-weight:700;margin-right:8px;">{escape(sev)}</span>
-      <span style="color:#666;font-size:12px;">[{escape(e.get('event_type', ''))}] · {escape(e.get('source', ''))}</span>
-      <div style="font-size:14px;color:#111;margin-top:4px;font-weight:500;">{escape(e.get('title', ''))}</div>
-      {link_html}
-    </td></tr>
+def _render_html(data: dict) -> str:
+    """Editorial-style weekly report (A+ design)."""
+    BG = "#faf8f3"
+    FG = "#1a1a1a"
+    MUTED = "#4a4a4a"
+    FAINT = "#8a8a8a"
+    RULE = "#d4cfc3"
+    ACCENT = "#991b1b"
+    SERIF = "Georgia,'Source Serif Pro','Noto Serif SC',serif"
+    SANS = "-apple-system,BlinkMacSystemFont,'Helvetica Neue','PingFang SC',sans-serif"
+
+    ROMAN = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX"]
+
+    def _esc(s):
+        return escape(str(s) if s is not None else "")
+
+    def _fmt_dl(n):
+        n = n or 0
+        if n >= 1_000_000:
+            return f"{n/1_000_000:.1f}M"
+        if n >= 1_000:
+            return f"{n/1_000:.1f}K"
+        return str(n)
+
+    def _parse_link(e):
+        try:
+            detail = json.loads(e.get("detail_json") or "{}")
+            return detail.get("url") or detail.get("html_url") or ""
+        except Exception:
+            return ""
+
+    stats = data["stats"]
+    week = data["week_number"]
+    now_str = datetime.now().strftime("%B %d, %Y")
+
+    masthead = f"""
+    <div class="mr-masthead" style="padding:52px 56px 40px;text-align:center;background:{BG};border-bottom:3px double {FG};">
+      <div style="font-family:{SERIF};font-size:11px;color:{FG};letter-spacing:0.5em;text-transform:uppercase;margin-bottom:10px;">MODELRADAR</div>
+      <div style="font-family:{SERIF};font-size:40px;color:{FG};font-weight:700;letter-spacing:-0.015em;line-height:1.15;margin:0;">The Week in Models</div>
+      <div style="font-family:{SERIF};font-style:italic;font-size:13px;color:{MUTED};margin-top:18px;">
+        Issue <strong style="font-weight:600;">{_esc(week.split('-W')[-1])}</strong> &middot; {now_str}
+      </div>
+      <div style="font-family:{SANS};font-size:10px;color:{FAINT};margin-top:12px;letter-spacing:0.1em;text-transform:uppercase;">
+        {stats['total_events']} alerts · {stats['new_releases']} releases · {stats['leaderboard_rows']} leaderboard rows
+      </div>
+    </div>
     """
 
-
-def _render_events_section(events: list[dict]) -> str:
-    if not events:
-        return "<div style='padding:18px;color:#999;text-align:center;'>本周 P0/P1 事件：无</div>"
-    return (
-        "<table style='width:100%;border-collapse:collapse;'>"
-        + "".join(_render_event_row(e) for e in events)
-        + "</table>"
-    )
-
-
-SOURCE_META = {
-    "lmarena":   {"label": "LMArena",             "color": "#6366f1", "bg": "#eef2ff"},
-    "aa":        {"label": "Artificial Analysis", "color": "#0891b2", "bg": "#ecfeff"},
-    "superclue": {"label": "SuperCLUE",           "color": "#db2777", "bg": "#fdf2f8"},
-}
-
-
-def _render_leaderboard_platform(platform: dict) -> str:
-    meta = SOURCE_META.get(platform["source"],
-                           {"label": platform["source"], "color": "#6b7280", "bg": "#f3f4f6"})
-    label, color, bg = meta["label"], meta["color"], meta["bg"]
-    url = platform.get("public_url")
-
-    badge_inner = f"""
-      <span style="display:inline-block;padding:3px 10px;background:{bg};color:{color};
-                   border-radius:4px;font-size:11px;font-weight:700;letter-spacing:0.5px;
-                   margin-bottom:8px;">{escape(label)}{' →' if url else ''}</span>"""
-    header = (
-        f'<a href="{escape(url)}" style="text-decoration:none;" target="_blank" rel="noopener">{badge_inner}</a>'
-        if url else f'<div>{badge_inner}</div>'
-    )
-
-    if not platform["top_n"]:
+    def sec(idx, title_en, title_zh, body):
+        roman = ROMAN[idx - 1]
         return f"""
-        <div style="flex:1;min-width:220px;">
-          {header}
-          <div style="color:#9ca3af;font-size:12px;padding:6px 0;">无数据</div>
-        </div>"""
+        <div class="mr-section" style="padding:56px 56px 44px;border-top:2px solid {FG};background:{BG};">
+          <div style="font-family:{SERIF};font-size:28px;color:{FG};font-weight:700;letter-spacing:-0.015em;line-height:1.2;margin-bottom:32px;">
+            <span style="color:{ACCENT};font-weight:400;font-size:22px;letter-spacing:0.05em;">§ {roman}</span>
+            <span style="color:{FAINT};font-weight:400;margin:0 12px;">·</span>{title_zh}
+            <span style="font-family:{SANS};font-size:11px;color:{FAINT};letter-spacing:0.25em;text-transform:uppercase;font-weight:400;margin-left:16px;vertical-align:middle;">{title_en}</span>
+          </div>
+          {body}
+        </div>
+        """
 
-    # 计算最大分数用于画条
-    scores = [it["score"] for it in platform["top_n"] if it.get("score") is not None]
-    max_score = max(scores) if scores else None
+    def summary_para(summary):
+        if not summary:
+            return ""
+        return f"""
+        <p style="font-family:{SERIF};font-size:17px;color:{FG};line-height:1.9;margin:0 0 32px 0;font-weight:400;">
+          {_esc(summary)}
+        </p>
+        """
 
-    rows = []
-    for it in platform["top_n"]:
-        change = it.get("change")
-        change_html = ""
-        if change:
-            change_html = (
-                f'<span style="display:inline-block;{_change_style(change)}'
-                f'font-size:10px;padding:1px 5px;border-radius:3px;margin-left:6px;font-weight:700;'
-                f'vertical-align:middle;">{escape(change)}</span>'
+    # --- I · Events (始终生成一句话概览；有 P0/P1 则在下方追加列表) ---
+    def _first_clause(s):
+        s = (s or "").strip()
+        for sep in ["。", ". ", ".\n"]:
+            if sep in s:
+                return s.split(sep)[0]
+        return s
+
+    parts = []
+    rel_items = data["releases"].get("items") or []
+    if rel_items:
+        names = "、".join(f"{r['org']}/{r['repo_name']}" for r in rel_items[:2])
+        parts.append(f"本周 {len(rel_items)} 款新发布（{names}）")
+
+    lb_first_sum = next((v.get("summary_md") for v in data["leaderboards"].values() if v.get("summary_md")), None)
+    if lb_first_sum:
+        parts.append(_first_clause(lb_first_sum))
+
+    or_sum = data["openrouter"].get("summary_md")
+    hf_sum = data["hf"].get("summary_md")
+    if or_sum:
+        parts.append(_first_clause(or_sum))
+    elif hf_sum:
+        parts.append(f"HF 趋势：{_first_clause(hf_sum)}")
+
+    op_models = data["opinions"].get("models") or []
+    theme_items = data["themes"].get("themes") or []
+    if op_models:
+        top_names = "、".join(m.get("model") or "" for m in op_models[:2])
+        parts.append(f"讨论集中在 {top_names}")
+    elif theme_items:
+        parts.append(f"社区围绕 {theme_items[0].get('title') or ''}")
+
+    digest_html = ""
+    if parts:
+        sentence = "；".join(parts) + "。"
+        digest_html = f"""
+        <p style="font-family:{SERIF};font-size:17px;color:{FG};line-height:1.9;margin:0 0 28px 0;">
+          {_esc(sentence)}
+        </p>
+        """
+
+    ev_rows = []
+    for e in data["events"]:
+        sev = e.get("severity") or "P2"
+        src = e.get("source") or ""
+        title = e.get("title") or ""
+        link = _parse_link(e)
+        link_html = f'&nbsp;<a href="{_esc(link)}" style="color:{ACCENT};text-decoration:none;">&raquo;</a>' if link else ""
+        sev_html = f'<span style="font-family:{SANS};font-size:10px;color:{ACCENT};letter-spacing:0.15em;font-weight:700;">[{_esc(sev)}]</span>'
+        ev_rows.append(f"""
+        <div style="padding:14px 0;border-bottom:1px dotted {RULE};font-family:{SERIF};font-size:15px;color:{FG};line-height:1.7;">
+          {sev_html} &nbsp;<em style="color:{FAINT};font-size:13px;">{_esc(src)}</em> &middot; {_esc(title)}{link_html}
+        </div>
+        """)
+
+    if ev_rows:
+        events_html = digest_html + "".join(ev_rows)
+    elif digest_html:
+        events_html = digest_html
+    else:
+        events_html = f'<div style="color:{FAINT};font-style:italic;font-family:{SERIF};">本周无数据。</div>'
+
+    # --- II · Releases ---
+    paras = []
+    for r in rel_items:
+        pub = (r.get("published_at") or "").split("T")[0]
+        paper = r.get("paper_url") or ""
+        paper_html = f' &middot; <a href="{_esc(paper)}" style="color:{ACCENT};">paper</a>' if paper else ""
+        paras.append(f"""
+        <p style="font-family:{SERIF};font-size:15px;color:{FG};line-height:1.8;margin:0 0 20px 0;">
+          <strong>{_esc(r['org'])}/{_esc(r['repo_name'])}</strong>
+          <span style="color:{FAINT};font-family:{SANS};font-size:12px;"> — {_esc(r.get('tag_name') or '')}, {_esc(pub)}</span>. {_esc(r.get('one_liner') or '')}
+          &nbsp;<a href="{_esc(r.get('html_url') or '')}" style="color:{ACCENT};text-decoration:none;">release &raquo;</a>{paper_html}
+        </p>
+        """)
+    releases_html = "".join(paras) if paras else f'<p style="color:{FAINT};font-style:italic;font-family:{SERIF};">本周无新发布。</p>'
+
+    # --- III · Leaderboards ---
+    lb_blocks = []
+    for domain_key, d in data["leaderboards"].items():
+        platforms_html = []
+        for p in d["platforms"]:
+            src = p["source"]
+            src_label = {"lmarena": "LMArena", "aa": "Artificial Analysis", "superclue": "SuperCLUE"}.get(src, src)
+            public_url = p.get("public_url") or ""
+            items_p = p.get("top_n") or []
+            rows_html = []
+            for it in items_p[:5]:
+                rank = it["rank"]
+                change = it.get("change") or ""
+                chg_html = f'<span style="font-family:{SANS};font-size:10px;color:{ACCENT};margin-left:6px;font-weight:600;">{_esc(change)}</span>' if change else ""
+                score = it.get("score")
+                score_html = f'<span style="font-family:{SANS};font-size:11px;color:{MUTED};">{score:.1f}</span>' if score is not None else ""
+                rows_html.append(f"""
+                <tr>
+                  <td style="padding:6px 0;font-family:{SERIF};font-size:12px;color:{FAINT};width:24px;vertical-align:top;">{rank}.</td>
+                  <td class="mr-name" style="padding:6px 0;font-family:{SERIF};font-size:14px;color:{FG};">{_esc(it['model_name'])}{chg_html}</td>
+                  <td style="padding:6px 0;text-align:right;vertical-align:top;">{score_html}</td>
+                </tr>
+                """)
+            label_html = (
+                f'<a href="{_esc(public_url)}" style="color:{MUTED};text-decoration:none;border-bottom:1px solid {RULE};">{_esc(src_label)} &rarr;</a>'
+                if public_url else _esc(src_label)
             )
-        # 分数条
-        score = it.get("score")
-        if score is not None and max_score:
-            pct = max(8, int(score / max_score * 100))
-            score_block = f"""
-            <div style="display:flex;align-items:center;gap:6px;min-width:72px;">
-              <div style="width:40px;height:3px;background:#f3f4f6;border-radius:2px;overflow:hidden;">
-                <div style="width:{pct}%;height:100%;background:{color};"></div>
-              </div>
-              <span style="color:{color};font-weight:600;font-size:11px;font-variant-numeric:tabular-nums;">{score:.1f}</span>
-            </div>"""
-        else:
-            score_block = '<div style="min-width:72px;"></div>'
-
-        # rank 圆点
-        rank_color = color if it["rank"] <= 3 else "#9ca3af"
-        rows.append(f"""
-        <div style="display:flex;align-items:center;gap:8px;padding:5px 0;
-                    border-bottom:1px dashed #f3f4f6;">
-          <span style="display:inline-flex;align-items:center;justify-content:center;
-                       width:20px;height:20px;border-radius:50%;background:{rank_color};color:white;
-                       font-size:10px;font-weight:700;flex-shrink:0;">{it['rank']}</span>
-          <span style="flex:1;font-size:12px;color:#1f2937;overflow:hidden;text-overflow:ellipsis;
-                       white-space:nowrap;">{escape(it['model_name'])}{change_html}</span>
-          {score_block}
-        </div>""")
-
-    return f"""
-    <div style="flex:1;min-width:240px;">
-      {header}
-      <div>{"".join(rows)}</div>
-    </div>"""
-
-
-def _render_leaderboard_section(leaderboards: dict) -> str:
-    if not leaderboards:
-        return "<div style='padding:18px;color:#999;text-align:center;'>榜单数据未就绪</div>"
-
-    blocks = []
-    for domain_key, d in leaderboards.items():
-        platforms_html = "".join(_render_leaderboard_platform(p) for p in d["platforms"])
-        baseline_note = (
-            '' if d.get("any_baseline") else
-            '<span style="color:#9ca3af;font-size:11px;font-weight:400;margin-left:8px;">· 冷启动期，暂无上周对比</span>'
-        )
-        blocks.append(f"""
-        <div style="padding:18px 22px;border-bottom:1px solid #eef2f7;">
-          <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:14px;">
-            {escape(d['title'])}{baseline_note}
+            platforms_html.append(f"""
+              <div style="font-family:{SERIF};font-style:italic;font-size:13px;color:{MUTED};margin-bottom:10px;letter-spacing:0.02em;">{label_html}</div>
+              <table style="width:100%;border-collapse:collapse;">{''.join(rows_html)}</table>
+            """)
+        summary = d.get("summary_md", "")
+        domain_summary = f"""
+        <p style="font-family:{SERIF};font-size:16px;color:{FG};line-height:1.9;margin:0 0 24px 0;">
+          {_esc(summary)}
+        </p>
+        """ if summary else ""
+        n = max(len(platforms_html), 1)
+        col_w = f"{100 // n}%"
+        cells = []
+        for i, p_html in enumerate(platforms_html):
+            pad = "0 16px 0 0" if i == 0 else ("0 0 0 16px" if i == len(platforms_html) - 1 else "0 16px")
+            cells.append(f'<td class="mr-lb-col" style="vertical-align:top;width:{col_w};padding:{pad};">{p_html}</td>')
+        platforms_table = f'<table style="width:100%;border-collapse:collapse;table-layout:fixed;"><tr class="mr-lb-tr">{"".join(cells)}</tr></table>'
+        lb_blocks.append(f"""
+        <div style="margin-bottom:40px;">
+          <div style="font-family:{SERIF};font-size:19px;color:{FG};font-weight:700;margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid {RULE};">
+            {_esc(d['title'])}
           </div>
-          <div style="display:flex;flex-wrap:wrap;gap:22px;">{platforms_html}</div>
-          <div style="padding:10px 14px;margin-top:14px;background:#f8fafc;border-left:3px solid #3b82f6;
-                      border-radius:4px;font-size:13px;color:#1f2937;line-height:1.65;">
-            <strong style="color:#3b82f6;">本周总结 · </strong>{escape(d['summary_md'])}
-          </div>
-        </div>""")
-    return "".join(blocks)
+          {domain_summary}
+          {platforms_table}
+        </div>
+        """)
+    leaderboards_html = "".join(lb_blocks)
 
-
-KIND_LABEL = {
-    "model":     ("🧠 模型", "#7c3aed"),
-    "eval":      ("📊 评测", "#0891b2"),
-    "framework": ("⚙️ 框架", "#059669"),
-    "tool":      ("🛠️ 工具", "#d97706"),
-    "other":     ("📦 其他", "#6b7280"),
-}
-
-
-def _render_release_item(r: dict) -> str:
-    kind = r.get("kind", "other")
-    label, color = KIND_LABEL.get(kind, KIND_LABEL["other"])
-    pub = (r.get("published_at") or "").split("T")[0]
-    paper = r.get("paper_url") or ""
-    paper_html = f' · <a href="{escape(paper)}" style="color:#1a7fd4;">📄 论文</a>' if paper else ""
-    return f"""
-    <div style="padding:12px 18px;border-bottom:1px solid #eee;">
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">
-        <span style="display:inline-block;background:{color};color:white;font-size:10px;
-                     padding:2px 7px;border-radius:3px;font-weight:700;">{escape(label)}</span>
-        <span style="font-size:14px;font-weight:600;color:#111;">{escape(r['org'])}/{escape(r['repo_name'])}</span>
-        <span style="color:#666;font-size:12px;">{escape(r.get('tag_name') or '')}</span>
-        <span style="color:#999;font-size:11px;margin-left:auto;">{escape(pub)}</span>
-      </div>
-      <div style="font-size:13px;color:#222;line-height:1.6;margin-top:4px;">{escape(r.get('one_liner') or '')}</div>
-      <div style="margin-top:6px;font-size:12px;">
-        <a href="{escape(r.get('html_url') or '')}" style="color:#1a7fd4;text-decoration:none;">🔗 Release</a>{paper_html}
-      </div>
-    </div>"""
-
-
-def _render_release_section(releases: dict) -> str:
-    items = releases.get("items") or []
-    if not items:
-        return "<div style='padding:18px;color:#999;text-align:center;'>本周无新 Release</div>"
-    return "".join(_render_release_item(r) for r in items)
-
-
-def _render_opinions_section(opinions: dict) -> str:
-    models = opinions.get("models") or []
-    if not models:
-        fb = opinions.get("fallback_md") or "本周社区数据不足。"
-        return f"<div style='padding:18px;color:#666;font-size:13px;line-height:1.6;'>{escape(fb)}</div>"
-
-    blocks = []
-    for m in models:
-        quotes_html = "".join(f"""
-        <div style="padding:8px 12px;margin:6px 0;background:#f8fafc;border-left:3px solid #5fd1b5;
-                    border-radius:3px;font-size:13px;color:#222;line-height:1.6;">
-          {escape(op['quote'])}
-          <div style="margin-top:4px;"><a href="{escape(op['url'])}" style="color:#1a7fd4;font-size:11px;">原帖 →</a></div>
-        </div>""" for op in m["opinions"])
-        blocks.append(f"""
-        <div style="padding:12px 18px;border-bottom:1px solid #eee;">
-          <div style="font-size:14px;font-weight:700;color:#111;margin-bottom:4px;">
-            {escape(m['model'])}
-            <span style="color:#999;font-size:11px;font-weight:400;margin-left:6px;">{m['post_count']} 帖</span>
-          </div>
-          {quotes_html}
-        </div>""")
-    return "".join(blocks)
-
-
-def _render_hf_section(hf_data: dict) -> str:
-    top = hf_data.get("top") or []
-    if not top:
-        return "<div style='padding:18px;color:#999;text-align:center;'>HuggingFace 数据未就绪</div>"
-
-    as_of = (hf_data.get("as_of") or "").split(".")[0]
-    baseline_note = (
-        '' if hf_data.get("any_baseline") else
-        '<span style="color:#9ca3af;font-size:11px;font-weight:400;margin-left:8px;">· 冷启动期，暂无上周对比</span>'
-    )
-
-    rows = []
-    for it in top:
+    # --- IV · HuggingFace ---
+    hf = data["hf"]
+    hf_top = hf.get("top") or []
+    max_dls = max((it.get("downloads") or 0) for it in hf_top) if hf_top else 1
+    hf_rows = []
+    for it in hf_top:
         rank = it["rank"]
-        rank_color = "#f97316" if rank <= 3 else "#9ca3af"
-
         change = it.get("change")
-        change_html = ""
-        if change == "NEW":
-            change_html = (
-                '<span style="display:inline-block;background:#22c55e;color:white;'
-                'font-size:10px;padding:1px 5px;border-radius:3px;margin-left:6px;'
-                'font-weight:700;vertical-align:middle;">NEW</span>'
-            )
-
-        pipe = it.get("pipeline_tag") or ""
-        pipe_html = (
-            f'<span style="display:inline-block;background:#eef2ff;color:#6366f1;'
-            f'font-size:10px;padding:1px 6px;border-radius:3px;margin-left:6px;'
-            f'font-weight:600;">{escape(pipe)}</span>' if pipe else ""
-        )
-
-        matched = it.get("matched_model")
-        matched_html = (
-            f'<span style="color:#0891b2;font-size:11px;margin-left:6px;">→ {escape(matched)}</span>'
-            if matched else ""
-        )
-
+        chg_html = f'<span style="font-family:{SANS};font-size:10px;color:{ACCENT};margin-left:8px;font-weight:700;letter-spacing:0.08em;padding:1px 5px;border:1px solid {ACCENT};">NEW</span>' if change == "NEW" else ""
         likes = it.get("likes") or 0
-        dls   = it.get("downloads") or 0
-        stats_html = (
-            f'<span style="color:#64748b;font-size:11px;font-variant-numeric:tabular-nums;'
-            f'white-space:nowrap;">❤ {likes} · ⬇ {_fmt_downloads(dls)}</span>'
-        )
+        dls = it.get("downloads") or 0
+        matched = it.get("matched_model") or ""
+        matched_html = f'<span style="color:{FAINT};font-size:11px;font-style:italic;"> — {_esc(matched)}</span>' if matched else ""
+        pct = max(3, int((dls / max_dls) * 100)) if max_dls else 0
+        bar = f"""
+        <div style="background:{RULE};height:4px;width:100%;">
+          <div style="width:{pct}%;background:{FG};height:100%;"></div>
+        </div>"""
+        hf_rows.append(f"""
+        <tr>
+          <td style="padding:9px 0;font-family:{SERIF};font-size:12px;color:{FAINT};width:28px;vertical-align:top;">{rank}.</td>
+          <td style="padding:9px 12px 9px 0;font-family:{SERIF};font-size:14px;color:{FG};vertical-align:middle;">
+            <a class="mr-name" href="{_esc(it.get('hf_url') or '')}" style="color:{FG};text-decoration:none;">{_esc(it.get('model_id') or '')}</a>{chg_html}{matched_html}
+          </td>
+          <td class="mr-bar-cell" style="padding:9px 0;width:140px;vertical-align:middle;">{bar}</td>
+          <td style="padding:9px 0 9px 12px;text-align:right;font-family:{SANS};font-size:11px;color:{MUTED};white-space:nowrap;vertical-align:middle;">
+            {_fmt_dl(dls)}↓ &nbsp; {likes}♡
+          </td>
+        </tr>
+        """)
+    hf_summary = hf.get("summary_md") or ""
+    hf_html = summary_para(hf_summary) + f'<table style="width:100%;border-collapse:collapse;">{"".join(hf_rows)}</table>'
 
-        rows.append(f"""
-        <div style="display:flex;align-items:center;gap:8px;padding:7px 0;
-                    border-bottom:1px dashed #f3f4f6;">
-          <span style="display:inline-flex;align-items:center;justify-content:center;
-                       width:22px;height:22px;border-radius:50%;background:{rank_color};color:white;
-                       font-size:11px;font-weight:700;flex-shrink:0;">{rank}</span>
-          <span style="flex:1;font-size:13px;color:#1f2937;overflow:hidden;
-                       text-overflow:ellipsis;white-space:nowrap;">
-            <a href="{escape(it['hf_url'])}" target="_blank" rel="noopener"
-               style="color:#1f2937;text-decoration:none;font-weight:500;">{escape(it['model_id'])}</a>
-            {change_html}{pipe_html}{matched_html}
-          </span>
-          {stats_html}
-        </div>""")
-
-    summary_md = (hf_data.get("summary_md") or "").strip()
-    summary_html = (
-        f"""
-      <div style="padding:10px 14px;margin-top:14px;background:#f8fafc;border-left:3px solid #f97316;
-                  border-radius:4px;font-size:13px;color:#1f2937;line-height:1.65;">
-        <strong style="color:#f97316;">本周总结 · </strong>{escape(summary_md)}
-      </div>"""
-        if summary_md else ""
-    )
-
-    return f"""
-    <div style="padding:14px 22px;">
-      <div style="font-size:11px;color:#94a3b8;margin-bottom:10px;">
-        快照时间 {escape(as_of)}{baseline_note}
-      </div>
-      <div>{"".join(rows)}</div>
-      {summary_html}
-    </div>"""
-
-
-def _render_openrouter_section(or_data: dict) -> str:
-    """OpenRouter 周榜：比 HF/榜单都"硬"——这是真金白银的 API token 消耗。"""
-    top = or_data.get("top") or []
-    if not top:
-        return "<div style='padding:18px;color:#999;text-align:center;'>OpenRouter 数据未就绪</div>"
-
-    week = or_data.get("week_date") or ""
-    rows = []
-    for it in top:
+    # --- V · OpenRouter ---
+    or_data = data["openrouter"]
+    or_top = or_data.get("top") or []
+    max_tokens = max((it.get("total_tokens") or 0) for it in or_top) if or_top else 1
+    or_rows = []
+    for it in or_top:
         rank = it["rank"]
-        rank_color = "#0ea5e9" if rank <= 3 else "#9ca3af"  # 天蓝色区分于 HF 的橙色
-
         chg = it.get("change_pct")
         is_new = it.get("is_new")
         if is_new:
-            chg_html = (
-                '<span style="display:inline-block;background:#22c55e;color:white;'
-                'font-size:10px;padding:1px 5px;border-radius:3px;margin-left:6px;'
-                'font-weight:700;vertical-align:middle;">NEW</span>'
-            )
-        elif chg is not None and chg >= 1.0:  # 暴涨 ≥ 100%
-            chg_html = (
-                f'<span style="display:inline-block;background:#fef3c7;color:#b45309;'
-                f'font-size:10px;padding:1px 5px;border-radius:3px;margin-left:6px;'
-                f'font-weight:700;vertical-align:middle;">🔥 +{chg*100:.0f}%</span>'
-            )
+            chg_html = f'<span style="font-family:{SANS};font-size:10px;color:{ACCENT};margin-left:8px;font-weight:700;letter-spacing:0.08em;padding:1px 5px;border:1px solid {ACCENT};">NEW</span>'
+        elif chg is not None and chg >= 1.0:
+            chg_html = f'<span style="font-family:{SANS};font-size:11px;color:{ACCENT};margin-left:8px;font-weight:700;">▲ {chg*100:.0f}%</span>'
         elif chg is not None and chg > 0:
-            chg_html = (
-                f'<span style="color:#16a34a;font-size:11px;margin-left:6px;font-weight:600;'
-                f'font-variant-numeric:tabular-nums;">▲ {chg*100:.0f}%</span>'
-            )
+            chg_html = f'<span style="font-family:{SANS};font-size:11px;color:{ACCENT};margin-left:8px;font-weight:600;">+{chg*100:.0f}%</span>'
         elif chg is not None and chg < 0:
-            chg_html = (
-                f'<span style="color:#dc2626;font-size:11px;margin-left:6px;font-weight:600;'
-                f'font-variant-numeric:tabular-nums;">▼ {chg*100:.0f}%</span>'
-            )
+            chg_html = f'<span style="font-family:{SANS};font-size:11px;color:{MUTED};margin-left:8px;">{chg*100:.0f}%</span>'
         else:
             chg_html = ""
-
-        matched = it.get("matched_model")
-        matched_html = (
-            f'<span style="color:#0891b2;font-size:11px;margin-left:6px;">→ {escape(matched)}</span>'
-            if matched else ""
-        )
-
-        tokens_html = (
-            f'<span style="color:#0f172a;font-size:12px;font-weight:600;'
-            f'font-variant-numeric:tabular-nums;white-space:nowrap;">{escape(it["tokens_display"])} tokens</span>'
-        )
-
-        author_html = (
-            f'<span style="color:#94a3b8;font-size:11px;">by {escape(it["author"] or "")}</span>'
-        )
-
-        rows.append(f"""
-        <div style="display:flex;align-items:center;gap:8px;padding:7px 0;
-                    border-bottom:1px dashed #f3f4f6;">
-          <span style="display:inline-flex;align-items:center;justify-content:center;
-                       width:22px;height:22px;border-radius:50%;background:{rank_color};color:white;
-                       font-size:11px;font-weight:700;flex-shrink:0;">{rank}</span>
-          <span style="flex:1;font-size:13px;color:#1f2937;overflow:hidden;
-                       text-overflow:ellipsis;white-space:nowrap;">
-            <a href="{escape(it['url'])}" target="_blank" rel="noopener"
-               style="color:#1f2937;text-decoration:none;font-weight:500;">{escape(it['name'])}</a>
-            {author_html}
-            {chg_html}{matched_html}
-          </span>
-          {tokens_html}
-        </div>""")
-
-    summary_md = (or_data.get("summary_md") or "").strip()
-    summary_html = (
-        f"""
-      <div style="padding:10px 14px;margin-top:14px;background:#f0f9ff;border-left:3px solid #0ea5e9;
-                  border-radius:4px;font-size:13px;color:#1f2937;line-height:1.65;">
-        <strong style="color:#0ea5e9;">本周总结 · </strong>{escape(summary_md)}
-      </div>"""
-        if summary_md else ""
-    )
-
-    return f"""
-    <div style="padding:14px 22px;">
-      <div style="font-size:11px;color:#94a3b8;margin-bottom:10px;">
-        周榜日期 {escape(week)} · OpenRouter 自聚合 · change% 为周环比
+        tokens = it.get("tokens_display") or "-"
+        tokens_raw = it.get("total_tokens") or 0
+        pct = max(3, int((tokens_raw / max_tokens) * 100)) if max_tokens else 0
+        bar_color = FG if rank <= 3 else MUTED
+        bar = f"""
+        <div style="background:{RULE};height:6px;width:100%;">
+          <div style="width:{pct}%;background:{bar_color};height:100%;"></div>
+        </div>"""
+        or_rows.append(f"""
+        <tr>
+          <td style="padding:11px 0;font-family:{SERIF};font-size:12px;color:{FAINT};width:28px;vertical-align:top;">{rank}.</td>
+          <td style="padding:11px 12px 11px 0;font-family:{SERIF};font-size:14px;color:{FG};vertical-align:middle;">
+            <a class="mr-name" href="{_esc(it.get('url') or '')}" style="color:{FG};text-decoration:none;font-weight:{'700' if rank <= 3 else '400'};">{_esc(it.get('name') or '')}</a>
+            <span style="color:{FAINT};font-size:12px;font-style:italic;"> — {_esc(it.get('author') or '')}</span>{chg_html}
+          </td>
+          <td class="mr-bar-cell" style="padding:11px 0;width:180px;vertical-align:middle;">{bar}</td>
+          <td style="padding:11px 0 11px 12px;text-align:right;font-family:{SANS};font-size:12px;color:{FG};font-weight:600;white-space:nowrap;vertical-align:middle;">
+            {_esc(tokens)}
+          </td>
+        </tr>
+        """)
+    or_summary = or_data.get("summary_md") or ""
+    top3_tokens = sum((it.get("total_tokens") or 0) for it in or_top[:3])
+    total_tokens = sum((it.get("total_tokens") or 0) for it in or_top)
+    top3_pct = int(top3_tokens / total_tokens * 100) if total_tokens else 0
+    or_stat_card = f"""
+    <div class="mr-stat-card" style="display:flex;gap:28px;padding:20px 24px;margin-bottom:26px;background:#ffffff;border:1px solid {RULE};">
+      <div class="mr-stat-cell mr-stat-cell-first" style="flex:1;">
+        <div style="font-family:{SANS};font-size:10px;color:{FAINT};letter-spacing:0.2em;text-transform:uppercase;margin-bottom:6px;">Top 3 Share</div>
+        <div style="font-family:{SERIF};font-size:32px;color:{FG};font-weight:700;letter-spacing:-0.02em;">{top3_pct}<span style="font-size:18px;color:{MUTED};">%</span></div>
+        <div style="font-family:{SERIF};font-style:italic;font-size:12px;color:{FAINT};margin-top:2px;">of top {len(or_top)} total</div>
       </div>
-      <div>{"".join(rows)}</div>
-      {summary_html}
-    </div>"""
+      <div class="mr-stat-cell" style="flex:1;border-left:1px solid {RULE};padding-left:24px;">
+        <div style="font-family:{SANS};font-size:10px;color:{FAINT};letter-spacing:0.2em;text-transform:uppercase;margin-bottom:6px;">Rank 1</div>
+        <div style="font-family:{SERIF};font-size:18px;color:{FG};font-weight:700;letter-spacing:-0.01em;">{_esc(or_top[0]['name']) if or_top else '-'}</div>
+        <div style="font-family:{SANS};font-size:12px;color:{MUTED};margin-top:4px;font-weight:600;">{_esc(or_top[0]['tokens_display']) if or_top else ''} tokens</div>
+      </div>
+      <div class="mr-stat-cell" style="flex:1;border-left:1px solid {RULE};padding-left:24px;">
+        <div style="font-family:{SANS};font-size:10px;color:{FAINT};letter-spacing:0.2em;text-transform:uppercase;margin-bottom:6px;">This Week</div>
+        <div style="font-family:{SERIF};font-size:18px;color:{FG};font-weight:700;letter-spacing:-0.01em;">
+          {sum(1 for it in or_top if it.get('is_new'))} <span style="font-size:13px;color:{MUTED};font-weight:400;">new</span> ·
+          {sum(1 for it in or_top if it.get('change_pct') and it['change_pct'] >= 1.0)} <span style="font-size:13px;color:{MUTED};font-weight:400;">surged</span>
+        </div>
+        <div style="font-family:{SERIF};font-style:italic;font-size:12px;color:{FAINT};margin-top:4px;">surge = +100% WoW</div>
+      </div>
+    </div>
+    """
+    or_source_label = f"""
+    <div style="font-family:{SERIF};font-style:italic;font-size:13px;color:{MUTED};margin-bottom:16px;letter-spacing:0.02em;">
+      <a href="https://openrouter.ai/rankings" style="color:{MUTED};text-decoration:none;border-bottom:1px solid {RULE};">openrouter.ai/rankings &rarr;</a>
+    </div>
+    """
+    openrouter_html = or_source_label + summary_para(or_summary) + or_stat_card + f'<table style="width:100%;border-collapse:collapse;">{"".join(or_rows)}</table>'
 
+    # --- VI · Opinions ---
+    models = data["opinions"].get("models") or []
+    op_blocks = []
+    for m in models:
+        quotes = []
+        for op in m.get("opinions") or []:
+            quotes.append(f"""
+            <blockquote style="margin:14px 0;padding:0 0 0 22px;border-left:3px solid {ACCENT};font-family:{SERIF};font-style:italic;font-size:15px;color:{FG};line-height:1.75;">
+              &ldquo;{_esc(op.get('quote') or '')}&rdquo;
+              <div style="margin-top:8px;font-family:{SANS};font-style:normal;font-size:11px;">
+                <a href="{_esc(op.get('url') or '')}" style="color:{ACCENT};text-decoration:none;">source &raquo;</a>
+              </div>
+            </blockquote>
+            """)
+        op_blocks.append(f"""
+        <div style="margin-bottom:28px;">
+          <div style="font-family:{SERIF};font-size:17px;color:{FG};font-weight:700;">
+            {_esc(m.get('model') or '')}
+            <span style="font-family:{SANS};font-size:11px;color:{FAINT};font-weight:400;margin-left:10px;font-style:italic;">{m.get('post_count') or 0} posts</span>
+          </div>
+          {''.join(quotes)}
+        </div>
+        """)
+    opinions_html = "".join(op_blocks) if op_blocks else f'<p style="font-family:{SERIF};font-style:italic;color:{FAINT};">{_esc(data["opinions"].get("fallback_md") or "")}</p>'
 
-def _fmt_downloads(n: int) -> str:
-    if n >= 1_000_000:
-        return f"{n/1_000_000:.1f}M"
-    if n >= 1_000:
-        return f"{n/1_000:.1f}K"
-    return str(n)
-
-
-def _render_themes_section(themes_data: dict) -> str:
-    themes = themes_data.get("themes") or []
-    if not themes:
-        fb = themes_data.get("fallback_md") or "本周 Reddit 数据不足，未归纳出热议主题。"
-        return f"<div style='padding:18px;color:#666;font-size:13px;line-height:1.6;'>{escape(fb)}</div>"
-
-    blocks = []
-    for t in themes:
+    # --- VII · Themes ---
+    t_items = data["themes"].get("themes") or []
+    t_blocks = []
+    for t in t_items:
         posts = t.get("posts") or []
-        links_html = " · ".join(
-            f'<a href="{escape(p.get("url") or "")}" '
-            f'style="color:#64748b;text-decoration:none;font-size:11px;" '
-            f'title="{escape((p.get("title") or "")[:120])}">'
-            f'r/{escape(p.get("subreddit") or "")} {p.get("score", 0)}↑</a>'
+        links_html = " &middot; ".join(
+            f'<a href="{_esc(p.get("url") or "")}" style="color:{FAINT};text-decoration:none;">r/{_esc(p.get("subreddit") or "")} {p.get("score", 0)}&uarr;</a>'
             for p in posts
         )
-        posts_html = (
-            f'<div style="margin-top:6px;color:#94a3b8;font-size:11px;">代表帖：{links_html}</div>'
-            if links_html else ""
-        )
-        blocks.append(f"""
-        <div style="padding:12px 18px;border-bottom:1px solid #eee;">
-          <div style="font-size:14px;font-weight:700;color:#111;margin-bottom:4px;">
-            {escape(t.get('title') or '')}
+        posts_html = f'<div style="margin-top:10px;font-family:{SANS};font-size:11px;color:{FAINT};font-style:italic;">{links_html}</div>' if links_html else ""
+        t_blocks.append(f"""
+        <div style="margin-bottom:40px;">
+          <div style="font-family:{SERIF};font-size:19px;color:{FG};font-weight:700;margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid {RULE};">
+            {_esc(t.get('title') or '')}
           </div>
-          <div style="font-size:13px;color:#334155;line-height:1.65;">
-            {escape(t.get('summary') or '')}
-          </div>
+          <p style="font-family:{SERIF};font-size:16px;color:{FG};line-height:1.9;margin:0;">{_esc(t.get('summary') or '')}</p>
           {posts_html}
-        </div>""")
-    return "".join(blocks)
+        </div>
+        """)
+    themes_html = "".join(t_blocks) if t_blocks else f'<p style="font-family:{SERIF};font-style:italic;color:{FAINT};">{_esc(data["themes"].get("fallback_md") or "")}</p>'
 
-
-def _render_html(data: dict) -> str:
-    week   = data["week_number"]
-    stats  = data["stats"]
-    events_html       = _render_events_section(data["events"])
-    leaderboard_html  = _render_leaderboard_section(data["leaderboards"])
-    hf_html           = _render_hf_section(data["hf"])
-    openrouter_html   = _render_openrouter_section(data["openrouter"])
-    releases_html     = _render_release_section(data["releases"])
-    opinions_html     = _render_opinions_section(data["opinions"])
-    themes_html       = _render_themes_section(data["themes"])
-
-    return f"""\
-<!doctype html>
-<html><body style="margin:0;padding:24px;background:#f5f5f7;font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif;">
-<div style="max-width:720px;margin:0 auto;background:white;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06);">
-
-  <div style="padding:24px 28px;background:linear-gradient(135deg,#0f172a,#1e3a8a);color:white;">
-    <div style="font-size:12px;opacity:0.7;letter-spacing:1px;">MODELRADAR WEEKLY</div>
-    <div style="font-size:22px;font-weight:700;margin-top:6px;">{escape(week)} · AI 模型周报</div>
-    <div style="font-size:12px;opacity:0.75;margin-top:8px;">
-      本周事件 <strong>{stats['total_events']}</strong> 条 ·
-      新 Release <strong>{stats['new_releases']}</strong> 个 ·
-      榜单快照 <strong>{stats['leaderboard_rows']}</strong> 行
+    footer = f"""
+    <div class="mr-footer" style="padding:32px 56px 44px;border-top:3px double {FG};text-align:center;background:{BG};">
+      <div style="font-family:{SERIF};font-size:11px;color:{FAINT};font-style:italic;letter-spacing:0.02em;">
+        ModelRadar &middot; compiled {datetime.now().strftime('%B %d, %Y · %H:%M')}
+      </div>
+      <div style="font-family:{SANS};font-size:10px;color:{FAINT};letter-spacing:0.1em;text-transform:uppercase;margin-top:8px;">
+        LMArena · Artificial Analysis · SuperCLUE · HuggingFace · OpenRouter · GitHub · Vendor Blogs · Reddit
+      </div>
     </div>
-  </div>
+    """
 
-  <div style="padding:18px 24px;border-bottom:1px solid #eee;">
-    <h3 style="margin:0 0 10px 0;font-size:14px;color:#111;">🔴 本周关键信号</h3>
-    {events_html}
-  </div>
-
-  <div style="padding:4px 6px;border-bottom:1px solid #eee;">
-    <h3 style="margin:14px 18px 4px;font-size:14px;color:#111;">
-      📦 本周新模型 / 开源发布
-      <span style="font-weight:400;color:#999;font-size:11px;margin-left:6px;">按 repo，含参数变化 + 突破点</span>
-    </h3>
-    {releases_html}
-  </div>
-
-  <div style="padding:4px 6px;border-bottom:1px solid #eee;">
-    <h3 style="margin:14px 18px 10px;font-size:14px;color:#111;">📊 榜单变化</h3>
-    {leaderboard_html}
-  </div>
-
-  <div style="padding:4px 6px;border-bottom:1px solid #eee;">
-    <h3 style="margin:14px 18px 4px;font-size:14px;color:#111;">
-      🤗 HuggingFace 趋势 Top 10
-      <span style="font-weight:400;color:#999;font-size:11px;margin-left:6px;">社区下载/讨论热度实时信号</span>
-    </h3>
-    {hf_html}
-  </div>
-
-  <div style="padding:4px 6px;border-bottom:1px solid #eee;">
-    <h3 style="margin:14px 18px 4px;font-size:14px;color:#111;">
-      🔌 OpenRouter 真实调用量
-      <span style="font-weight:400;color:#999;font-size:11px;margin-left:6px;">开发者生产环境 token 消耗 · 周粒度</span>
-    </h3>
-    {openrouter_html}
-  </div>
-
-  <div style="padding:4px 6px;border-bottom:1px solid #eee;">
-    <h3 style="margin:14px 18px 4px;font-size:14px;color:#111;">
-      💬 社区声音
-      <span style="font-weight:400;color:#999;font-size:11px;margin-left:6px;">Reddit 按模型聚合</span>
-    </h3>
-    {opinions_html}
-  </div>
-
-  <div style="padding:4px 6px;border-bottom:1px solid #eee;">
-    <h3 style="margin:14px 18px 4px;font-size:14px;color:#111;">
-      💭 本周社区热议
-      <span style="font-weight:400;color:#999;font-size:11px;margin-left:6px;">LLM 归纳 · 基于 Reddit Top {data['themes'].get('post_count', 0)} 帖</span>
-    </h3>
-    {themes_html}
-  </div>
-
-  <div style="padding:16px 24px;background:#fafafa;color:#999;font-size:11px;text-align:center;">
-    ModelRadar 周报 · 生成于 {datetime.now().strftime('%Y-%m-%d %H:%M')} · 数据源 LMArena / AA / SuperCLUE / HuggingFace / OpenRouter / GitHub / 厂商博客 / Reddit
-  </div>
+    return f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style type="text/css">
+@media only screen and (max-width: 600px) {{
+  body.mr-body {{ padding: 0 !important; }}
+  .mr-container {{ max-width: 100% !important; box-shadow: none !important; }}
+  .mr-masthead {{ padding: 32px 18px 24px !important; }}
+  .mr-section {{ padding: 32px 18px 28px !important; }}
+  .mr-footer {{ padding: 24px 18px 28px !important; }}
+  .mr-lb-tr, .mr-lb-col {{ display: block !important; width: 100% !important; }}
+  .mr-lb-col {{ padding: 0 0 28px 0 !important; }}
+  .mr-stat-card {{ display: block !important; padding: 14px 16px !important; }}
+  .mr-stat-cell {{ display: block !important; border-left: none !important; padding: 14px 0 0 0 !important; margin-top: 14px !important; border-top: 1px solid #d4cfc3 !important; }}
+  .mr-stat-cell-first {{ border-top: none !important; margin-top: 0 !important; padding-top: 0 !important; }}
+  .mr-bar-cell {{ display: none !important; }}
+  .mr-name {{ word-break: break-all !important; overflow-wrap: anywhere !important; }}
+}}
+</style>
+</head>
+<body class="mr-body" style="margin:0;padding:32px 20px;background:#eeeae0;font-family:{SANS};">
+<div class="mr-container" style="max-width:800px;margin:0 auto;background:{BG};box-shadow:0 1px 3px rgba(0,0,0,0.05);">
+  {masthead}
+  {sec(1, "ALERTS", "本周关键信号", events_html)}
+  {sec(2, "NEW RELEASES", "新模型 / 开源发布", releases_html)}
+  {sec(3, "LEADERBOARD SHIFTS", "榜单变化", leaderboards_html)}
+  {sec(4, "HUGGINGFACE TRENDING", "HuggingFace 趋势", hf_html)}
+  {sec(5, "OPENROUTER THROUGHPUT", "OpenRouter 真实调用量", openrouter_html)}
+  {sec(6, "COMMUNITY VOICES", "社区声音", opinions_html)}
+  {sec(7, "WHAT PEOPLE ARE DISCUSSING", "本周社区热议", themes_html)}
+  {footer}
 </div>
 </body></html>"""
 
