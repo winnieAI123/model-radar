@@ -8,6 +8,7 @@ v4 结构（2026-04-22 第三轮调整：加 HF 板块 + 重新排序）：
 5. 🤗 HuggingFace 趋势 Top 10（社区下载/讨论热度，NEW 徽标跨周对比）
 6. 💬 社区声音（按 matched_model 聚合 + LLM 提炼用户观点 + 原帖链接）
 7. 💭 本周社区热议（Reddit Top 帖按 LLM 归纳 3-5 个主题，兜底 alias 匹配不到的新话题）
+8. 📮 中文社区观察（过去 7d 公众号文章按事件聚合 + 每篇文章的独特角度）
 
 砍掉：🔥 热度 Top 10（绝对分无对比参照信息量低，留到热度维度齐全后再加"本周上升最快"视图）。
 
@@ -28,6 +29,7 @@ from backend.engine import (
     reddit_opinions,
     reddit_themes,
     release_digest,
+    wechat_themes,
 )
 from backend.utils.email_sender import send_email
 
@@ -478,13 +480,42 @@ def _render_html(data: dict) -> str:
         """)
     themes_html = "".join(t_blocks) if t_blocks else f'<p style="font-family:{SERIF};font-style:italic;color:{FAINT};">{_esc(data["themes"].get("fallback_md") or "")}</p>'
 
+    # --- VIII · WeChat Themes ---
+    w_items = (data.get("wechat") or {}).get("themes") or []
+    w_blocks = []
+    for t in w_items:
+        articles = t.get("articles") or []
+        art_rows = []
+        for a in articles:
+            angle = a.get("angle") or ""
+            angle_html = f'<span style="color:{FG};">{_esc(angle)}</span>' if angle else ""
+            art_rows.append(
+                f'<div style="margin-top:8px;font-family:{SERIF};font-size:13px;color:{MUTED};line-height:1.7;">'
+                f'<span style="font-family:{SANS};font-size:11px;color:{FAINT};letter-spacing:0.04em;text-transform:uppercase;">{_esc(a.get("source") or "")}</span> '
+                f'&middot; <a href="{_esc(a.get("url") or "")}" style="color:{ACCENT};text-decoration:none;">{_esc((a.get("title") or "")[:80])}</a> '
+                f'{"&mdash; " + angle_html if angle_html else ""}'
+                f'</div>'
+            )
+        arts_html = "".join(art_rows)
+        w_blocks.append(f"""
+        <div style="margin-bottom:40px;">
+          <div style="font-family:{SERIF};font-size:19px;color:{FG};font-weight:700;margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid {RULE};">
+            {_esc(t.get('title') or '')}
+          </div>
+          <p style="font-family:{SERIF};font-size:16px;color:{FG};line-height:1.9;margin:0;">{_esc(t.get('summary') or '')}</p>
+          {arts_html}
+        </div>
+        """)
+    wechat_fallback = (data.get("wechat") or {}).get("fallback_md") or ""
+    wechat_html = "".join(w_blocks) if w_blocks else f'<p style="font-family:{SERIF};font-style:italic;color:{FAINT};">{_esc(wechat_fallback)}</p>'
+
     footer = f"""
     <div class="mr-footer" style="padding:32px 56px 44px;border-top:3px double {FG};text-align:center;background:{BG};">
       <div style="font-family:{SERIF};font-size:11px;color:{FAINT};font-style:italic;letter-spacing:0.02em;">
         ModelRadar &middot; compiled {datetime.now().strftime('%B %d, %Y · %H:%M')}
       </div>
       <div style="font-family:{SANS};font-size:10px;color:{FAINT};letter-spacing:0.1em;text-transform:uppercase;margin-top:8px;">
-        LMArena · Artificial Analysis · SuperCLUE · HuggingFace · OpenRouter · GitHub · Vendor Blogs · Reddit
+        LMArena · Artificial Analysis · SuperCLUE · HuggingFace · OpenRouter · GitHub · Vendor Blogs · Reddit · WeChat
       </div>
     </div>
     """
@@ -521,6 +552,7 @@ def _render_html(data: dict) -> str:
   {sec(5, "OPENROUTER THROUGHPUT", "OpenRouter 真实调用量", openrouter_html)}
   {sec(6, "COMMUNITY VOICES", "社区声音", opinions_html)}
   {sec(7, "WHAT PEOPLE ARE DISCUSSING", "本周社区热议", themes_html)}
+  {sec(8, "WECHAT PULSE", "中文社区观察", wechat_html)}
   {footer}
 </div>
 </body></html>"""
@@ -549,6 +581,9 @@ def _persist(data: dict, html: str) -> None:
         "themes":         {"theme_count": len(data["themes"].get("themes") or []),
                            "post_count":  data["themes"].get("post_count", 0),
                            "used_llm":    data["themes"].get("used_llm", False)},
+        "wechat":         {"theme_count":   len((data.get("wechat") or {}).get("themes") or []),
+                           "article_count": (data.get("wechat") or {}).get("article_count", 0),
+                           "used_llm":      (data.get("wechat") or {}).get("used_llm", False)},
         "alias_learner":  {"auto_accepted": len((data.get("alias_stats") or {}).get("auto_accepted") or []),
                            "pending_added": (data.get("alias_stats") or {}).get("pending_added", 0)},
     }, ensure_ascii=False)
@@ -610,6 +645,7 @@ def generate(days: int = 7) -> dict:
     # themes 过程里 LLM 识别的模型名也会走自动接受。
     alias_stats       = _safe_call("alias_learner", alias_learner.learn_from_reddit, days=days) or {}
     themes            = _safe_call("themes",        reddit_themes.generate, days=days) or {"themes": [], "post_count": 0, "used_llm": False, "fallback_md": "(themes 模块异常)"}
+    wechat            = _safe_call("wechat_themes", wechat_themes.generate, days=days) or {"themes": [], "article_count": 0, "used_llm": False, "fallback_md": "(wechat_themes 模块异常)"}
 
     return {
         "week_number":   week,
@@ -623,6 +659,7 @@ def generate(days: int = 7) -> dict:
         "releases":      releases,
         "opinions":      opinions,
         "themes":        themes,
+        "wechat":        wechat,
         "alias_stats":   alias_stats,
     }
 
