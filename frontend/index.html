@@ -16,6 +16,7 @@
     <span class="subtitle">AI 模型实时雷达</span>
   </div>
   <div class="meta">
+    <span id="health-dot" class="health-dot" title="系统健康" data-state="ok"></span>
     <span id="last-update">—</span>
     <button id="refresh" class="btn">刷新</button>
   </div>
@@ -23,30 +24,27 @@
 
 <main class="container">
 
-  <section class="kpis">
-    <div class="kpi" data-k="leaderboard_rows"><span class="label">榜单快照</span><span class="value">—</span></div>
-    <div class="kpi" data-k="github_repos"><span class="label">GitHub 仓库</span><span class="value">—</span></div>
-    <div class="kpi" data-k="github_releases"><span class="label">Release</span><span class="value">—</span></div>
-    <div class="kpi" data-k="change_events"><span class="label">变动事件</span><span class="value">—</span></div>
-    <div class="kpi warn" data-k="pending_alerts"><span class="label">待发 P0</span><span class="value">—</span></div>
-  </section>
+  <div id="week-glance" class="week-glance">
+    <div class="sentence" id="week-sentence">加载中…</div>
+    <a href="#weekly-reports-section" class="goto-report">查看本周周报 →</a>
+  </div>
 
-  <section class="grid">
+  <section class="main-grid">
 
-    <div class="card wide">
+    <div class="card card-signals">
       <div class="card-head">
-        <h2>🔴 告警信号</h2>
+        <h2>🔴 关键信号</h2>
         <div class="tabs">
-          <button class="tab active" data-sev="">全部</button>
+          <button class="tab active" data-sev="important">重要</button>
+          <button class="tab" data-sev="">全部</button>
           <button class="tab" data-sev="P0">P0</button>
           <button class="tab" data-sev="P1">P1</button>
-          <button class="tab" data-sev="P2">P2</button>
         </div>
       </div>
-      <div id="alerts" class="alerts">加载中...</div>
+      <div id="alerts" class="signals"><div class="loading">加载中…</div></div>
     </div>
 
-    <div class="card">
+    <div class="card card-heat">
       <div class="card-head">
         <h2>🔥 热度 Top 10</h2>
         <span id="heat-date" class="hint">—</span>
@@ -54,17 +52,14 @@
       <div id="heat" class="heat">加载中...</div>
     </div>
 
-    <div class="card">
+    <div class="card card-timeline">
       <div class="card-head">
-        <h2>📡 系统健康</h2>
-      </div>
-      <div id="collectors" class="collectors">加载中...</div>
-    </div>
-
-    <div class="card wide">
-      <div class="card-head">
-        <h2>🕒 Timeline · 变动流水</h2>
+        <h2>🕒 Timeline · 最近变动</h2>
         <span id="timeline-total" class="hint">—</span>
+      </div>
+      <div class="tl-toolbar">
+        <button id="tl-toggle-all" class="tl-toggle">显示全部（含已过滤）</button>
+        <span id="tl-filter-info" class="tl-filter-info">—</span>
       </div>
       <div id="timeline" class="timeline">加载中...</div>
       <div class="card-foot">
@@ -72,25 +67,46 @@
       </div>
     </div>
 
-    <div class="card wide">
-      <div class="card-head">
-        <h2>📬 历史周报 <span class="hint">(周一 09:00 自动生成)</span></h2>
-      </div>
-      <div id="weekly-reports" class="weekly-reports">加载中...</div>
-    </div>
-
-    <div class="card wide">
-      <div class="card-head">
-        <h2>🧭 待归一化模型名 <span class="hint">(手工补 ALIAS_TABLE 可消化)</span></h2>
-      </div>
-      <div id="pending" class="pending">加载中...</div>
-    </div>
-
   </section>
+
+  <div class="secondary">
+
+    <details id="collectors-details">
+      <summary>
+        <span class="title">📡 系统健康</span>
+        <span class="hint" id="collectors-hint">—</span>
+      </summary>
+      <div class="details-body">
+        <div id="collectors" class="collectors">—</div>
+      </div>
+    </details>
+
+    <details id="weekly-reports-section">
+      <summary>
+        <span class="title">📬 历史周报</span>
+        <span class="hint">周一 09:00 自动生成</span>
+      </summary>
+      <div class="details-body">
+        <div id="weekly-reports" class="weekly-reports">—</div>
+      </div>
+    </details>
+
+    <details id="pending-details">
+      <summary>
+        <span class="title">🧭 待归一化模型名</span>
+        <span class="hint" id="pending-hint">—</span>
+      </summary>
+      <div class="details-body">
+        <div id="pending" class="pending">—</div>
+      </div>
+    </details>
+
+  </div>
 </main>
 
 <footer>
-  ModelRadar · 自托管实时模型情报 · 数据来源：LMArena / ArtificialAnalysis / SuperCLUE / GitHub
+  <div class="stats" id="footer-stats"></div>
+  <div>ModelRadar · 自托管实时模型情报 · 数据来源：LMArena / ArtificialAnalysis / SuperCLUE / GitHub</div>
 </footer>
 
 <script src="/static/app.js"></script>
