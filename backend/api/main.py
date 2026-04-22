@@ -25,8 +25,9 @@ from backend.collectors import reddit as reddit_collector
 from backend.collectors import huggingface as hf_collector
 from backend.collectors import blog_rss as blog_collector
 from backend.collectors import openrouter as openrouter_collector
+from backend.collectors import wechat_rss as wechat_collector
 from backend.db import get_conn
-from backend.engine import alert_manager, diff_engine, heat_scorer, weekly_report
+from backend.engine import alert_manager, diff_engine, heat_scorer, weekly_report, mini_digest
 from backend.utils import config
 
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s — %(message)s"
@@ -62,18 +63,21 @@ def _run_reddit(): reddit_collector.collect()
 def _run_hf():     hf_collector.collect()
 def _run_blog():   blog_collector.collect()
 def _run_openrouter(): openrouter_collector.collect()
+def _run_wechat(): wechat_collector.collect()
+def _run_mini_digest(): mini_digest.run_all()
 def _run_weekly(): weekly_report.generate_and_send(days=7, dry_run=False)
 
 
 def _cold_start():
     logger.info("=" * 60)
-    logger.info("冷启动：leaderboard → github → hf → blog → openrouter → diff → p0 → heat")
+    logger.info("冷启动：leaderboard → github → hf → blog → openrouter → wechat → diff → p0 → heat")
     logger.info("=" * 60)
     _safe(_run_leaderboard, "leaderboard")()
     _safe(_run_github, "github")()
     _safe(_run_hf, "huggingface")()
     _safe(_run_blog, "blog_rss")()
     _safe(_run_openrouter, "openrouter")()
+    _safe(_run_wechat, "wechat_rss")()
     _safe(_run_diff, "diff")()
     _safe(_run_alerts, "p0_alert")()
     _safe(_run_heat, "heat")()
@@ -110,6 +114,12 @@ def _register_jobs():
     scheduler.add_job(_safe(_run_openrouter, "openrouter"),
                       IntervalTrigger(minutes=config.INTERVAL_OPENROUTER_MIN),
                       id="openrouter", max_instances=1, coalesce=True)
+    scheduler.add_job(_safe(_run_wechat, "wechat_rss"),
+                      IntervalTrigger(minutes=config.INTERVAL_WECHAT_MIN),
+                      id="wechat_rss", max_instances=1, coalesce=True)
+    scheduler.add_job(_safe(_run_mini_digest, "mini_digest"),
+                      IntervalTrigger(minutes=config.INTERVAL_MINI_DIGEST_MIN),
+                      id="mini_digest", max_instances=1, coalesce=True)
     # 周一 09:00 Asia/Shanghai 发周报
     scheduler.add_job(_safe(_run_weekly, "weekly_report"),
                       CronTrigger(day_of_week="mon", hour=9, minute=0,
@@ -137,12 +147,13 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     logger.info(
         "调度器启动 · leaderboard=%dmin github=%dmin diff=%dmin p0=%dmin heat=%dmin "
-        "reddit=%dmin hf=%dmin blog=%dmin openrouter=%dmin 周报=周一09:00",
+        "reddit=%dmin hf=%dmin blog=%dmin openrouter=%dmin wechat=%dmin mini_digest=%dmin 周报=周一09:00",
         config.INTERVAL_LEADERBOARD_MIN, config.INTERVAL_GITHUB_MIN,
         config.INTERVAL_DIFF_MIN, config.INTERVAL_P0_ALERT_MIN,
         config.INTERVAL_HEAT_MIN, config.INTERVAL_REDDIT_MIN,
         config.INTERVAL_HF_MIN, config.INTERVAL_BLOG_MIN,
-        config.INTERVAL_OPENROUTER_MIN,
+        config.INTERVAL_OPENROUTER_MIN, config.INTERVAL_WECHAT_MIN,
+        config.INTERVAL_MINI_DIGEST_MIN,
     )
     try:
         yield

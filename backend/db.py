@@ -203,6 +203,17 @@ CREATE TABLE IF NOT EXISTS openrouter_rankings (
 CREATE INDEX IF NOT EXISTS idx_or_week    ON openrouter_rankings(week_date, rank);
 CREATE INDEX IF NOT EXISTS idx_or_scraped ON openrouter_rankings(scraped_at);
 CREATE INDEX IF NOT EXISTS idx_or_matched ON openrouter_rankings(matched_model, scraped_at);
+
+-- Dashboard 聚合缓存：mini_digest 和周报都会写这张表，Dashboard API 直接读。
+-- kind='opinions'（模型级 Reddit 观点）或 'themes'（主题聚类），window_days=聚合窗口。
+-- payload_json 是已经拼好的前端 ready 结构；generated_at 给前端显示"x 分钟前"。
+CREATE TABLE IF NOT EXISTS digest_cache (
+    kind          TEXT NOT NULL,
+    window_days   INTEGER NOT NULL,
+    payload_json  TEXT NOT NULL,
+    generated_at  DATETIME NOT NULL,
+    PRIMARY KEY (kind, window_days)
+);
 """
 
 

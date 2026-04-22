@@ -13,9 +13,10 @@
   <div class="brand">
     <span class="dot"></span>
     <span class="title">ModelRadar</span>
-    <span class="subtitle">AI 模型实时雷达</span>
+    <span class="subtitle">The Live Edition</span>
   </div>
   <div class="meta">
+    <a id="alert-badge" href="#alert-bar" class="alert-badge" hidden>🔔 <span id="alert-count">0</span></a>
     <span id="health-dot" class="health-dot" title="系统健康" data-state="ok"></span>
     <span id="last-update">—</span>
     <button id="refresh" class="btn">刷新</button>
@@ -24,49 +25,76 @@
 
 <main class="container">
 
-  <div id="week-glance" class="week-glance">
-    <div class="sentence" id="week-sentence">加载中…</div>
-    <a href="#weekly-reports-section" class="goto-report">查看本周周报 →</a>
-  </div>
+  <details id="alert-bar" class="alert-bar" hidden>
+    <summary>
+      <span class="alert-summary-title">🚨 关键信号 · <span id="alert-bar-count">0</span> 条待处理</span>
+      <span class="hint">点击展开</span>
+    </summary>
+    <div id="alert-list" class="alert-list"></div>
+  </details>
 
-  <section class="main-grid">
-
-    <div class="card card-signals">
-      <div class="card-head">
-        <h2>🔴 关键信号</h2>
-        <div class="tabs">
-          <button class="tab active" data-sev="important">重要</button>
-          <button class="tab" data-sev="">全部</button>
-          <button class="tab" data-sev="P0">P0</button>
-          <button class="tab" data-sev="P1">P1</button>
-        </div>
+  <!-- Row 1 · 首屏核心：发布 2fr + 榜单 1fr -->
+  <section class="row row-1">
+    <div class="panel panel-releases">
+      <div class="panel-head">
+        <h2><span class="roman">§ I</span>新模型 / 开源发布<span class="kicker">New Releases</span></h2>
+        <span class="panel-updated" id="u-releases">—</span>
       </div>
-      <div id="alerts" class="signals"><div class="loading">加载中…</div></div>
+      <div id="p-releases" class="panel-body loading">加载中…</div>
     </div>
 
-    <div class="card card-heat">
-      <div class="card-head">
-        <h2>🔥 热度 Top 10</h2>
-        <span id="heat-date" class="hint">—</span>
+    <div class="panel panel-lb">
+      <div class="panel-head">
+        <h2><span class="roman">§ II</span>榜单<span class="kicker">Leaderboards</span></h2>
+        <span class="panel-updated" id="u-lb">—</span>
       </div>
-      <div id="heat" class="heat">加载中...</div>
+      <div class="lb-tabs">
+        <button class="lb-tab active" data-tab="llm">LLM</button>
+        <button class="lb-tab" data-tab="t2i">文生图</button>
+        <button class="lb-tab" data-tab="t2v">文生视频</button>
+        <button class="lb-tab" data-tab="i2v">图生视频</button>
+        <button class="lb-tab" data-tab="extras">更多</button>
+      </div>
+      <div id="p-lb" class="panel-body loading">加载中…</div>
+    </div>
+  </section>
+
+  <!-- Row 2 · 三列 mini 板块 -->
+  <section class="row row-2">
+    <div class="panel panel-hf">
+      <div class="panel-head">
+        <h2><span class="roman">§ III</span>HuggingFace<span class="kicker">Community Pulse</span></h2>
+        <span class="panel-updated" id="u-hf">—</span>
+      </div>
+      <div id="p-hf" class="panel-body loading">加载中…</div>
     </div>
 
-    <div class="card card-timeline">
-      <div class="card-head">
-        <h2>🕒 Timeline · 最近变动</h2>
-        <span id="timeline-total" class="hint">—</span>
+    <div class="panel panel-or">
+      <div class="panel-head">
+        <h2><span class="roman">§ IV</span>OpenRouter 周榜<span class="kicker">Usage Weekly</span></h2>
+        <span class="panel-updated" id="u-or">—</span>
       </div>
-      <div class="tl-toolbar">
-        <button id="tl-toggle-all" class="tl-toggle">显示全部（含已过滤）</button>
-        <span id="tl-filter-info" class="tl-filter-info">—</span>
-      </div>
-      <div id="timeline" class="timeline">加载中...</div>
-      <div class="card-foot">
-        <button id="timeline-more" class="btn">加载更多</button>
-      </div>
+      <div id="p-or" class="panel-body loading">加载中…</div>
     </div>
 
+    <div class="panel panel-opinions">
+      <div class="panel-head">
+        <h2><span class="roman">§ V</span>社区声音<span class="kicker">Voices</span></h2>
+        <span class="panel-updated" id="u-opinions">—</span>
+      </div>
+      <div id="p-opinions" class="panel-body loading">加载中…</div>
+    </div>
+  </section>
+
+  <!-- Row 3 · 深度 -->
+  <section class="row row-3">
+    <div class="panel panel-themes">
+      <div class="panel-head">
+        <h2><span class="roman">§ VI</span>本周热议<span class="kicker">Discussions</span></h2>
+        <span class="panel-updated" id="u-themes">—</span>
+      </div>
+      <div id="p-themes" class="panel-body loading">加载中…</div>
+    </div>
   </section>
 
   <div class="secondary">
@@ -106,7 +134,7 @@
 
 <footer>
   <div class="stats" id="footer-stats"></div>
-  <div>ModelRadar · 自托管实时模型情报 · 数据来源：LMArena / ArtificialAnalysis / SuperCLUE / GitHub</div>
+  <div>ModelRadar · 自托管实时模型情报 · 数据源：LMArena / AA / SuperCLUE / GitHub / HF / OpenRouter / Reddit / Blog / WeChat</div>
 </footer>
 
 <script src="/static/app.js"></script>

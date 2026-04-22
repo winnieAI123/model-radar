@@ -174,7 +174,7 @@ def _format_platforms_for_prompt(platforms: list[dict]) -> str:
 def _llm_domain_summary(domain_title: str, platforms: list[dict]) -> tuple[str, bool]:
     any_baseline = any(p["has_baseline"] for p in platforms)
     if any_baseline:
-        baseline_note = "数据包含上周基准，着重讲『本周』相比上周的变化（新登顶 / 跌出 Top 5 / 排名大幅变动）。"
+        baseline_note = "数据包含上周基准，着重讲『本周』相比上周的变化（新登顶 / 跌出 Top 10 / 排名大幅变动）。"
     else:
         baseline_note = "目前没有上周基准快照（系统刚上线），本次只讲『当前』格局：谁在领先、谁在咬尾。下周起会开始对比变化。"
 
@@ -183,7 +183,7 @@ def _llm_domain_summary(domain_title: str, platforms: list[dict]) -> tuple[str, 
 
     user_content = (
         f"{HUMANIZER_PRINCIPLES}\n\n"
-        f"任务：请针对『{domain_title}』这个领域，读下面各平台的 Top 5 榜单，"
+        f"任务：请针对『{domain_title}』这个领域，读下面各平台的 Top 20 榜单，"
         f"写一句或两句（总计 40-80 字）中文总结，告诉工程师读者当前格局的关键信号。\n\n"
         f"说明：\n"
         f"- 同一个模型在不同平台名字可能略有差异（canonical 标签帮你对齐，例如 `Nano Banana 2` 和 "
@@ -217,7 +217,7 @@ def _llm_domain_summary(domain_title: str, platforms: list[dict]) -> tuple[str, 
     return f"{domain_title}当前格局：{'；'.join(parts) if parts else '数据缺失'}。", False
 
 
-def generate(days: int = 7, top_n: int = 5) -> dict:
+def generate(days: int = 7, top_n: int = 20) -> dict:
     baseline_cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
     out: dict[str, dict] = {}
 

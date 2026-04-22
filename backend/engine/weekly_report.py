@@ -4,7 +4,7 @@ v4 结构（2026-04-22 第三轮调整：加 HF 板块 + 重新排序）：
 1. 头部：周数 + 本周事件/Release/榜单快照 统计
 2. 🔴 本周关键信号（change_events P0/P1；含厂商博客 new_blog_post）
 3. 📦 本周新模型/开源发布（按 repo 列 + LLM 参数变化 + 突破点 + 论文链接）
-4. 📊 榜单变化（按领域聚合 LMArena/AA/SuperCLUE Top 5 + LLM 跨平台一句话）
+4. 📊 榜单变化（按领域聚合 LMArena/AA/SuperCLUE Top 20 + LLM 跨平台一句话）
 5. 🤗 HuggingFace 趋势 Top 10（社区下载/讨论热度，NEW 徽标跨周对比）
 6. 💬 社区声音（按 matched_model 聚合 + LLM 提炼用户观点 + 原帖链接）
 7. 💭 本周社区热议（Reddit Top 帖按 LLM 归纳 3-5 个主题，兜底 alias 匹配不到的新话题）
@@ -281,7 +281,7 @@ def _render_html(data: dict) -> str:
             public_url = p.get("public_url") or ""
             items_p = p.get("top_n") or []
             rows_html = []
-            for it in items_p[:5]:
+            for it in items_p[:20]:
                 rank = it["rank"]
                 change = it.get("change") or ""
                 chg_html = f'<span style="font-family:{SANS};font-size:10px;color:{ACCENT};margin-left:6px;font-weight:600;">{_esc(change)}</span>' if change else ""
@@ -633,6 +633,16 @@ def generate_and_send(days: int = 7, dry_run: bool = False) -> dict:
         data = generate(days=days)
         html = _render_html(data)
         _persist(data, html)
+
+        # 周报跑完把 opinions / themes 也写进 digest_cache，保证周一清晨 Dashboard 聚合板块立刻有内容。
+        try:
+            from backend.engine import mini_digest
+            if data.get("opinions"):
+                mini_digest._write_cache("opinions", days, data["opinions"])
+            if data.get("themes"):
+                mini_digest._write_cache("themes", days, data["themes"])
+        except Exception as cache_err:
+            logger.warning("[Weekly] digest_cache 双写失败（不影响周报发送）: %s", cache_err)
 
         result = {"week": data["week_number"], "sent": False, "html_bytes": len(html)}
         if dry_run:
