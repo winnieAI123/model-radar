@@ -1,0 +1,33 @@
+# Secrets
+.env
+.env.local
+.env.*.local
+
+# Data
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+data/*.png
+data/*.html
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.pytest_cache/
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Railway
+.railway/

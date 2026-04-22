@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>ModelRadar · 模型雷达</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='10' fill='%23ef4444'/%3E%3Ccircle cx='16' cy='16' r='5' fill='%2300000000' stroke='%23fff' stroke-width='2'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="dot"></span>
+    <span class="title">ModelRadar</span>
+    <span class="subtitle">AI 模型实时雷达</span>
+  </div>
+  <div class="meta">
+    <span id="last-update">—</span>
+    <button id="refresh" class="btn">刷新</button>
+  </div>
+</header>
+
+<main class="container">
+
+  <section class="kpis">
+    <div class="kpi" data-k="leaderboard_rows"><span class="label">榜单快照</span><span class="value">—</span></div>
+    <div class="kpi" data-k="github_repos"><span class="label">GitHub 仓库</span><span class="value">—</span></div>
+    <div class="kpi" data-k="github_releases"><span class="label">Release</span><span class="value">—</span></div>
+    <div class="kpi" data-k="change_events"><span class="label">变动事件</span><span class="value">—</span></div>
+    <div class="kpi warn" data-k="pending_alerts"><span class="label">待发 P0</span><span class="value">—</span></div>
+  </section>
+
+  <section class="grid">
+
+    <div class="card wide">
+      <div class="card-head">
+        <h2>🔴 告警信号</h2>
+        <div class="tabs">
+          <button class="tab active" data-sev="">全部</button>
+          <button class="tab" data-sev="P0">P0</button>
+          <button class="tab" data-sev="P1">P1</button>
+          <button class="tab" data-sev="P2">P2</button>
+        </div>
+      </div>
+      <div id="alerts" class="alerts">加载中...</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>🔥 热度 Top 10</h2>
+        <span id="heat-date" class="hint">—</span>
+      </div>
+      <div id="heat" class="heat">加载中...</div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>📡 系统健康</h2>
+      </div>
+      <div id="collectors" class="collectors">加载中...</div>
+    </div>
+
+    <div class="card wide">
+      <div class="card-head">
+        <h2>🕒 Timeline · 变动流水</h2>
+        <span id="timeline-total" class="hint">—</span>
+      </div>
+      <div id="timeline" class="timeline">加载中...</div>
+      <div class="card-foot">
+        <button id="timeline-more" class="btn">加载更多</button>
+      </div>
+    </div>
+
+    <div class="card wide">
+      <div class="card-head">
+        <h2>📬 历史周报 <span class="hint">(周一 09:00 自动生成)</span></h2>
+      </div>
+      <div id="weekly-reports" class="weekly-reports">加载中...</div>
+    </div>
+
+    <div class="card wide">
+      <div class="card-head">
+        <h2>🧭 待归一化模型名 <span class="hint">(手工补 ALIAS_TABLE 可消化)</span></h2>
+      </div>
+      <div id="pending" class="pending">加载中...</div>
+    </div>
+
+  </section>
+</main>
+
+<footer>
+  ModelRadar · 自托管实时模型情报 · 数据来源：LMArena / ArtificialAnalysis / SuperCLUE / GitHub
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
