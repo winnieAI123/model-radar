@@ -180,8 +180,6 @@ model-radar/
 │   ├── index.html                   # Dashboard SPA 主页
 │   ├── styles.css                   # 深色主题样式
 │   └── app.js                       # 原生 JS，fetch 调用后端 API
-├── tests/
-│   └── smoke_test.py                # 端到端烟雾测试 (P0 邮件通路 + 去重)
 ├── data/                            # SQLite 文件 (被 .gitignore 排除)
 ├── requirements.txt                 # Python 依赖
 ├── Procfile                         # Railway 启动命令
