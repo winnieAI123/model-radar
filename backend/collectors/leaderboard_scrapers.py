@@ -149,7 +149,7 @@ def scrape_superclue() -> dict[str, list[dict]]:
     try:
         resp = requests.get(base_url, headers=HEADERS, timeout=15)
         resp.raise_for_status()
-        m = re.search(r"/assets/(vue-vendor-[A-Za-z0-9]+\.js)", resp.text)
+        m = re.search(r"/assets/(vue-vendor-[A-Za-z0-9_-]+\.js)", resp.text)
         if not m:
             raise RuntimeError("无法在 SuperCLUE 首页找到 vue-vendor JS 路径")
         vendor_url = f"{base_url}/assets/{m.group(1)}"
