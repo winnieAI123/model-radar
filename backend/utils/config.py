@@ -1,10 +1,13 @@
 """环境变量读取层。所有模块通过 config 访问配置，不直接读 os.environ。"""
 import os
 from pathlib import Path
-from dotenv import load_dotenv
 
-_ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(_ROOT / ".env")
+try:
+    from dotenv import load_dotenv
+    _ROOT = Path(__file__).resolve().parents[2]
+    load_dotenv(_ROOT / ".env")
+except ImportError:
+    pass
 
 
 def _get(key: str, default: str | None = None, required: bool = False) -> str:
