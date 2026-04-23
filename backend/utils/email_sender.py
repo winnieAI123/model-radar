@@ -20,12 +20,17 @@ SMTP_PORT = 465
 
 
 def _resolve_smtp_host(hostname: str) -> tuple[str, bool]:
-    """DNS 解析，失败时降级到 DoH。返回 (host_or_ip, is_ip)。"""
+    """DNS 解析（强制 IPv4），失败时降级到 DoH。返回 (host_or_ip, is_ip)。
+
+    Railway 等 PaaS 容器经常没有 IPv6 出站路由，若拿到 AAAA 记录走 IPv6
+    会在 connect() 时报 Errno 101 Network is unreachable。所以这里强制 IPv4
+    并直接用 IP 走 SNI 路径，绕开 smtplib 内部的 getaddrinfo 选择。"""
     try:
-        socket.getaddrinfo(hostname, SMTP_PORT)
-        return hostname, False
+        infos = socket.getaddrinfo(hostname, SMTP_PORT, family=socket.AF_INET)
+        ip = infos[0][4][0]
+        return ip, True
     except socket.gaierror:
-        logger.warning("DNS 解析 %s 失败，尝试 DoH 降级", hostname)
+        logger.warning("DNS 解析 %s 失败（IPv4），尝试 DoH 降级", hostname)
 
     doh_urls = [
         f"https://dns.google/resolve?name={hostname}&type=A",
