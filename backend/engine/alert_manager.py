@@ -89,6 +89,49 @@ def send_p0_alerts() -> dict:
             record_status("alert_p0", success=True)
             return result
 
+        # Bootstrap 过滤：首次扫描某 org 时，全部存量仓库会被判成 new_repo P0（冷启动误报）。
+        # 借鉴 weekly_report.py:79-101 —— 与该 org 的 first_scan 时间相差 <5min 的 new_repo/new_release 直接标 bootstrap_skipped。
+        with get_conn() as conn:
+            scan_rows = conn.execute(
+                "SELECT org, MIN(scraped_at) AS first_at FROM github_snapshots GROUP BY org"
+            ).fetchall()
+        first_scan = {r["org"]: r["first_at"] for r in scan_rows}
+
+        real_events: list[dict] = []
+        bootstrap_ids: list[int] = []
+        for e in events:
+            if e["event_type"] in ("new_repo", "new_release"):
+                try:
+                    org = (json.loads(e.get("detail_json") or "{}") or {}).get("org")
+                except Exception:
+                    org = None
+                first_at = first_scan.get(org)
+                if first_at:
+                    try:
+                        t_event = datetime.fromisoformat(e["created_at"])
+                        t_first = datetime.fromisoformat(first_at)
+                        if abs((t_event - t_first).total_seconds()) < 300:
+                            bootstrap_ids.append(e["id"])
+                            continue
+                    except Exception:
+                        pass
+            real_events.append(e)
+
+        if bootstrap_ids:
+            with get_conn() as conn:
+                placeholders = ",".join("?" for _ in bootstrap_ids)
+                conn.execute(
+                    f"UPDATE change_events SET alerted=1, alerted_at=CURRENT_TIMESTAMP, "
+                    f"alert_status='bootstrap_skipped' WHERE id IN ({placeholders})",
+                    bootstrap_ids,
+                )
+            logger.info("[AlertManager] 跳过 %d 条 bootstrap 误报（已标已处理）", len(bootstrap_ids))
+
+        if not real_events:
+            record_status("alert_p0", success=True)
+            return result
+
+        events = real_events
         subject, body = _render_html(events)
         ok = send_email(subject=subject, html_body=body)
         if not ok:
