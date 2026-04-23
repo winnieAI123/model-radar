@@ -31,8 +31,9 @@ def _get_bool(key: str, default: bool = False) -> bool:
 GITHUB_TOKEN = _get("GITHUB_TOKEN")
 
 EMAIL_SENDER = _get("EMAIL_SENDER")
-EMAIL_PASSWORD = _get("EMAIL_PASSWORD")
+EMAIL_PASSWORD = _get("EMAIL_PASSWORD")  # 旧 SMTP 密码，Brevo 时代不再使用
 EMAIL_RECEIVERS = [e.strip() for e in _get("EMAIL_RECEIVERS", "").split(",") if e.strip()]
+BREVO_API_KEY = _get("BREVO_API_KEY")  # Brevo HTTP API key，必填（PaaS 屏蔽 SMTP 端口）
 
 DEEPSEEK_API_KEY = _get("DEEPSEEK_API_KEY")
 HF_TOKEN = _get("HF_TOKEN")
