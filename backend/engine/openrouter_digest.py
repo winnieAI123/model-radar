@@ -140,7 +140,7 @@ def _llm_summary(rows: list[dict]) -> tuple[str, bool]:
     return "；".join(bits) + "。", False
 
 
-def generate(top_n: int = 15) -> dict:
+def generate(top_n: int = 20) -> dict:
     """产出 OpenRouter Top N + 一句话总结。"""
     with get_conn() as conn:
         latest = _latest_snapshot(conn)

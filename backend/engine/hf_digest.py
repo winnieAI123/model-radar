@@ -165,7 +165,7 @@ def _llm_summary(rows: list[dict], dropped: list[str], any_baseline: bool) -> tu
     return f"Top 榜领头：{top1}；Top 10 按 pipeline 分布为 {pipe_desc}。", False
 
 
-def generate(days: int = 7, top_n: int = 10) -> dict:
+def generate(days: int = 7, top_n: int = 20) -> dict:
     """产出 HF trending Top N + 跨周对比 + LLM 一句话总结。"""
     with get_conn() as conn:
         latest_t = _latest_snapshot_time(conn, "trending")
