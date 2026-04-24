@@ -38,16 +38,24 @@ HUMANIZER_PRINCIPLES = """写作原则：
 - 事件标题要具体。"大模型最新进展" 太虚；"GPT-Image-2 文生图新模型发布" 就具体；"Claude Opus 4.7 实测与反馈" 也算具体。
 - summary 30-80 字，说清楚这个主题的核心（模型是什么 + 本周围绕它的主要讨论点），不要营销话术。
 - angle 每篇 15-40 字，说清楚这篇文章相比其他文章的独特角度（深度测评 / 官方通稿翻译 / 用户实测 / 上手教程 / 对比某竞品 / 行业影响分析 / 个人吐槽等）。
+- **维度标签**（可选，仅当正文中明确涉及时）：价格 / 体验 / 场景 / 对比。任何一个维度若正文有实质内容，就在 dimensions 数组里加上对应 key；没提到就别硬凑，让 summary 自己发挥。
 - 允许深度评测、上手教程、使用反馈作为有效文章 —— 只要围绕一个具体的模型/产品/工具即可。
 - 同一事件如果多篇文章角度完全相同（都是搬运官方通稿），只保留最具体的那篇。"""
 
 
+# 正文投喂 LLM 的长度上限。太长 token 浪费；太短丢失"价格/体验/场景/对比"这类埋在正文里的细节。
+# 2500 字约覆盖绝大多数公众号长文的前 60-80%（文尾的推广/免责声明不需要）。
+BODY_SNIPPET_MAX = 2500
+
+
 def _fetch_posts(conn, days: int, limit: int = 150) -> list[dict]:
-    """取过去 N 天所有 wechat_* 源的文章。按 published_at 倒序。"""
+    """取过去 N 天所有 wechat_* 源的文章。按 published_at 倒序。
+    body_full 是 2026-04-24 新加的列，旧文章可能为 NULL，用 summary 作 fallback。
+    """
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
     rows = conn.execute(
         """
-        SELECT url, source, title, summary, published_at, matched_model
+        SELECT url, source, title, summary, body_full, published_at, matched_model
         FROM blog_posts
         WHERE source LIKE 'wechat_%'
           AND published_at >= ?
@@ -70,14 +78,16 @@ def _author_of(source: str) -> str:
 
 def _format_post(p: dict, i: int) -> str:
     title = (p["title"] or "")[:120]
-    body = (p.get("summary") or "").replace("\n", " ")[:400]
+    # body_full 优先（新数据），退化到 summary（历史数据或非微信源）
+    raw_body = p.get("body_full") or p.get("summary") or ""
+    body = raw_body.replace("\n", " ").replace("  ", " ")[:BODY_SNIPPET_MAX]
     author = _author_of(p.get("source") or "")
     matched = f" · matched={p['matched_model']}" if p.get("matched_model") else ""
     pub = (p.get("published_at") or "")[:10]
     return (
         f"[{i}] {author} · {pub}{matched}\n"
         f"   标题: {title}\n"
-        f"   正文片段: {body or '(无摘要)'}"
+        f"   正文: {body or '(无正文)'}"
     )
 
 
@@ -85,17 +95,19 @@ def _build_prompt(posts: list[dict]) -> list[dict]:
     posts_lines = "\n\n".join(_format_post(p, i + 1) for i, p in enumerate(posts))
     user_content = (
         f"{HUMANIZER_PRINCIPLES}\n\n"
-        f"任务：下面是本周中文技术公众号按发布时间倒序的 {len(posts)} 篇文章。\n"
+        f"任务：下面是本周中文技术公众号按发布时间倒序的 {len(posts)} 篇文章（含正文前 {BODY_SNIPPET_MAX} 字）。\n"
         f"请按**模型/产品/工具**为主轴聚合，归纳最多 20 个主题，每个主题给一个 JSON 对象：\n"
-        f'  - "title":    中文主题标题，25 字以内，具体（带型号/产品名，如"Claude Opus 4.7 实测与反馈"）\n'
-        f'  - "summary":  中文一句话说清楚这个主题的核心（模型是什么 + 本周围绕它有哪些讨论），30-80 字\n'
-        f'  - "post_ids": 数组，挑 1-N 条属于该主题的文章编号（上面 [N] 里的 N）\n'
-        f'  - "angles":   数组，每个元素是字符串，和 post_ids 顺序一致，说明该篇文章的独特角度（15-40 字）\n\n'
+        f'  - "title":      中文主题标题，25 字以内，具体（带型号/产品名，如"Claude Opus 4.7 实测与反馈"）\n'
+        f'  - "summary":    中文一句话说清楚这个主题的核心（模型是什么 + 本周围绕它有哪些讨论），30-80 字\n'
+        f'  - "dimensions": 可选数组，仅当正文实质涉及时才加入，元素取值为 "价格"/"体验"/"场景"/"对比" 中的一个或多个。没提到的维度不要放，没有涉及的维度整个数组为 [] 即可\n'
+        f'  - "post_ids":   数组，挑 1-N 条属于该主题的文章编号（上面 [N] 里的 N）\n'
+        f'  - "angles":     数组，每个元素是字符串，和 post_ids 顺序一致，说明该篇文章的独特角度（15-40 字）\n\n'
         f"要求：\n"
         f"- **合并同一模型/产品的所有文章**到一个主题下。例如不同公众号都在讲 Claude Opus 4.7（一篇是官方发布解读、一篇是实测吐槽、一篇是对比测评），合成 1 个主题，articles 里列 3 篇各自的角度。\n"
         f"- 允许「深度评测 / 上手教程 / 使用反馈 / 个人吐槽」作为有效文章 —— 只要围绕一个具体的模型/产品/工具即可。\n"
         f"- 过滤完全离题的内容：纯商业八卦、纯招聘、纯活动预告、纯金融投融资（不涉及具体模型/产品）。\n"
         f"- 单篇文章不涉及具体模型/产品但有技术价值（如「怎么写 Prompt」「Agent 设计方法论」等方法论文章）的，可以单独成一个主题。\n"
+        f"- **维度标签不强制**：只在文章真提到价格（token 单价 / 订阅费）/体验（响应速度 / UI / bug）/场景（代码 / 写作 / 长文本 / Agent）/对比（vs 其他模型）时标。没提就别凑。\n"
         f"- 主题数量上限 20 个，按数据实际情况出，不硬凑。\n"
         f"- post_ids 和 angles 数组长度必须一致。\n\n"
         f"--- 文章 ---\n"
@@ -142,6 +154,7 @@ def generate(days: int = 7, top_posts: int = 150) -> dict:
     raw = llm_client.chat(_build_prompt(posts), temperature=0.3, max_tokens=3000)
     items = _parse_json(raw)
 
+    VALID_DIMS = {"价格", "体验", "场景", "对比"}
     themes: list[dict] = []
     for it in items:
         if not isinstance(it, dict):
@@ -150,6 +163,13 @@ def generate(days: int = 7, top_posts: int = 150) -> dict:
         summary = (it.get("summary") or "").strip()
         ids     = it.get("post_ids") or []
         angles  = it.get("angles")   or []
+        # dimensions 可选：过滤非法值、去重、保持顺序
+        dims_raw = it.get("dimensions") or []
+        dimensions: list[str] = []
+        if isinstance(dims_raw, list):
+            for d in dims_raw:
+                if isinstance(d, str) and d.strip() in VALID_DIMS and d.strip() not in dimensions:
+                    dimensions.append(d.strip())
         if not title or not summary:
             continue
         article_refs = []
@@ -172,7 +192,8 @@ def generate(days: int = 7, top_posts: int = 150) -> dict:
             })
         if not article_refs:
             continue
-        themes.append({"title": title, "summary": summary, "articles": article_refs})
+        themes.append({"title": title, "summary": summary,
+                       "dimensions": dimensions, "articles": article_refs})
 
     logger.info("[WeChatThemes] 归纳 %d 个事件（基于 %d 篇文章）", len(themes), len(posts))
     return {

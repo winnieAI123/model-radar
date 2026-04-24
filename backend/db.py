@@ -174,12 +174,28 @@ CREATE TABLE IF NOT EXISTS blog_posts (
     source        TEXT NOT NULL,              -- e.g. "openai" / "anthropic" / "google_ai" / "meta_ai"
     title         TEXT NOT NULL,
     summary       TEXT,                       -- RSS 给的 summary 截断 1000 字
+    body_full     TEXT,                       -- 仅微信源用：完整正文纯文本（去 HTML），用于 wechat_themes LLM 分析
     published_at  DATETIME,
     matched_model TEXT,
     scraped_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_blog_source  ON blog_posts(source, published_at);
 CREATE INDEX IF NOT EXISTS idx_blog_matched ON blog_posts(matched_model, published_at);
+
+-- Reddit 一级评论：绑定 reddit_posts.post_id。作用是让 reddit_opinions 拿到真实用户回复，
+-- 而不是只基于 title+selftext 瞎猜（大 V 发 "新模型出了" 一句话带出来几百条评论才是信息密度所在）。
+-- (post_id, comment_id) 组合主键天然去重；重复采集同一贴只更新 score/body（allow INSERT OR REPLACE）。
+CREATE TABLE IF NOT EXISTS reddit_comments (
+    post_id     TEXT NOT NULL,
+    comment_id  TEXT NOT NULL,
+    author      TEXT,
+    body        TEXT,
+    score       INTEGER DEFAULT 0,
+    created_utc INTEGER,
+    scraped_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (post_id, comment_id)
+);
+CREATE INDEX IF NOT EXISTS idx_rc_post ON reddit_comments(post_id, score);
 
 -- OpenRouter 周榜：每周谁在被真调用（token 量口径，非下载/likes 这种社区声量）
 -- 数据源：https://openrouter.ai/rankings 页面里 Next.js RSC payload，rankingType="week"
@@ -228,6 +244,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
         "UPDATE change_events SET alert_status='suppressed' "
         "WHERE alerted=1 AND (alert_status IS NULL OR alert_status='pending')"
     )
+
+    # blog_posts: 加 body_full（微信全文），用于 wechat_themes LLM 深度分析
+    bp_cols = {r["name"] for r in conn.execute("PRAGMA table_info(blog_posts)").fetchall()}
+    if "body_full" not in bp_cols:
+        conn.execute("ALTER TABLE blog_posts ADD COLUMN body_full TEXT")
 
 
 def _init_db(conn: sqlite3.Connection) -> None:

@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 WEWE_RSS_URL = "https://wewe-rss-sqlite-production-b5ca.up.railway.app/feeds/all.json"
 
 SUMMARY_TRUNC = 1000
+# 全文入库上限（字符）。微信长文极少超过这个，足够 LLM 提取任何维度；同时防止异常 RSS 把 DB 撑爆。
+BODY_FULL_MAX = 30000
 
 # 去 HTML 标签：把 content_html 剥离成纯文本供 diff_engine 使用
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -51,12 +53,14 @@ def _persist(conn, item) -> bool:
         
     # WeWe RSS 在开启 FEED_MODE=fulltext 时，会在 content_html 中输出全文
     raw_html = item.get("content_html") or item.get("content_text") or item.get("summary") or ""
-    summary = _strip_html(raw_html)[:SUMMARY_TRUNC]
-    
+    full_text = _strip_html(raw_html)
+    body_full = full_text[:BODY_FULL_MAX] if full_text else None
+    summary = full_text[:SUMMARY_TRUNC]
+
     published = _parse_published(item.get("date_modified") or item.get("date_published") or "")
-    
-    # 尝试匹配模型名
-    matched = _match_model(f"{title}\n{summary}")
+
+    # 尝试匹配模型名（用全文，命中率比只看 summary 更高）
+    matched = _match_model(f"{title}\n{full_text[:2000]}")
 
     # 获取公众号名称作为 source
     author_data = item.get("author", {})
@@ -67,10 +71,10 @@ def _persist(conn, item) -> bool:
     cur = conn.execute(
         """
         INSERT OR IGNORE INTO blog_posts
-          (url, source, title, summary, published_at, matched_model)
-        VALUES (?, ?, ?, ?, ?, ?)
+          (url, source, title, summary, body_full, published_at, matched_model)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        (url, source, title, summary, published, matched),
+        (url, source, title, summary, body_full, published, matched),
     )
     return cur.rowcount > 0
 
