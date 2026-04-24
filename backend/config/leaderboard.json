@@ -19,11 +19,11 @@
     },
     "superclue": {
       "base_url": "https://www.superclueai.com",
+      "_note": "category_order 必须与 SuperCLUE 首页 vue-vendor JS bundle 中榜单 entries 的物理排列顺序完全一致（scraper 按 rank=1 切 group 后按 index 赋名）。SuperCLUE 每次改版都可能重排，若数据与现实对不上需来这里校准（2026-04-24 对齐过一次）。",
       "category_order": [
-        "text_to_image",
         "text_to_video",
         "image_to_video",
-        "image_edit",
+        "text_to_image",
         "text_to_speech",
         "ref_to_video",
         "web_coding"
@@ -32,7 +32,6 @@
         "text_to_image": "文生图",
         "text_to_video": "文生视频",
         "image_to_video": "图生视频",
-        "image_edit": "图像编辑",
         "text_to_speech": "语音合成",
         "ref_to_video": "参考视频",
         "web_coding": "前端网页"

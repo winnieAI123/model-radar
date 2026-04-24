@@ -167,6 +167,7 @@ def scrape_superclue() -> dict[str, list[dict]]:
         all_data = {}
         for i, group in enumerate(groups):
             name = cat_order[i] if i < len(cat_order) else f"unknown_{i}"
+            _sc_sanity_check(name, group)
             all_data[name] = group
         return all_data
     except Exception as e:
@@ -284,6 +285,35 @@ def _extract_sc_inline_entries(js: str) -> list[dict]:
         except json.JSONDecodeError:
             pass
     return entries
+
+
+_SC_CATEGORY_KEYWORDS = {
+    "text_to_image":  ["flux", "imagen", "gpt-image", "nano-banana", "nano banana", "seedream", "dall-e", "qwen-image", "midjourney", "firefly"],
+    "text_to_video":  ["seedance", "sora", "runway gen", "wan", "cogvideo", "vidu q3"],
+    "image_to_video": ["kling", "可灵", "veo", "pixverse", "dreamina", "gen-3", "gen-4", "hailuo", "luma"],
+    "text_to_speech": ["tts", "speech", "voice", "语音", "azure neural", "doubao-seed-tts"],
+    "ref_to_video":   ["vidu q2", "vivago", "pika", "kling 1", "可灵 1"],
+    "web_coding":     ["glm", "qwen3", "kimi", "claude", "gpt-5", "deepseek", "gemini-3"],
+}
+
+
+def _sc_sanity_check(name: str, group: list[dict]) -> None:
+    """粗粒度检查：用 Top-5 模型名关键词反推真实类别，若与 config 分配严重不符就 WARNING。
+    （2026-04-24 SuperCLUE 改 JS bundle 顺序一次，把 text_to_video 的内容放进了 text_to_image 槽；靠这个护栏早期发现。）"""
+    if name not in _SC_CATEGORY_KEYWORDS:
+        return
+    top5 = [str(e.get("model", "")).lower() for e in group[:5]]
+    if not top5:
+        return
+    scores: dict[str, int] = {}
+    for cat, kws in _SC_CATEGORY_KEYWORDS.items():
+        scores[cat] = sum(1 for m in top5 for kw in kws if kw in m)
+    best_cat = max(scores, key=scores.get) if scores else name
+    if scores.get(best_cat, 0) >= 2 and best_cat != name and scores[best_cat] > scores.get(name, 0):
+        logger.warning(
+            "[SC] 类别疑似错配：config 标为 %r 但 Top5 关键词更像 %r | Top5=%s | 请检查 backend/config/leaderboard.json 的 superclue.category_order",
+            name, best_cat, top5,
+        )
 
 
 def _split_by_rank1(entries: list[dict]) -> list[list[dict]]:
