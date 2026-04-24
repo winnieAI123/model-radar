@@ -283,7 +283,7 @@ function renderLbPanel(d) {
   } else {
     // 仅 lmarena + LLM 榜单在第三列展示价格（OR 官方 extra_json.price_per_1m_tokens，形如 "$5/$25"）
     const showPrice = src.source === "lmarena" && state.lbTab === "llm";
-    const col3Label = showPrice ? "输入/输出 1M tokens" : "评分";
+    const col3Label = showPrice ? "Price $/M" : "评分";
     const headerHtml = `
       <div class="lb-row lb-header">
         <span class="rank">#</span>
