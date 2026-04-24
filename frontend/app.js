@@ -8,6 +8,7 @@ const state = {
   lbData: null,                       // 缓存最近一次 dashboard.leaderboards
   alertFilter: { modality: "all", openness: "all" },  // 关键信号 panel 过滤器
   alertData: null,                    // 缓存最近一次 dashboard.alerts 用于客户端过滤
+  prevAlertIds: null,                 // 上一次渲染的事件 id 集合；用于算"新增"条数
 };
 
 async function jfetch(url, opts = {}) {
@@ -160,35 +161,36 @@ const EVENT_BADGE = {
 };
 const HIGHLIGHT_EVENTS = new Set(["rank_crowned", "rank_change"]);
 
-const LAST_SEEN_KEY = "modelradar_alert_last_seen_ts";
-function getLastSeenTs() {
-  try { return localStorage.getItem(LAST_SEEN_KEY) || ""; } catch { return ""; }
-}
-function setLastSeenTs(iso) {
-  try { localStorage.setItem(LAST_SEEN_KEY, iso); } catch {}
-}
-
-function renderAlertBar(alerts) {
+function renderAlertBar(alerts, { isRefresh = true } = {}) {
   state.alertData = alerts;
   const recentAll = alerts?.recent || [];
   const bar = $("#alert-bar");
   const badge = $("#alert-badge");
 
-  // "新消息" = created_at 晚于上次访问时间戳的条数；首次访问 lastSeen 为空则全部算新
-  const lastSeen = getLastSeenTs();
-  const isNew = (e) => !lastSeen || (e.created_at && e.created_at > lastSeen);
-  const newCount = recentAll.filter(isNew).length;
-  $("#alert-bar-count").textContent = newCount;
-  $("#alert-count").textContent = newCount;
+  // "新消息" = 相比上一次刷新新增的事件数；首次刷新把全部当作新增。
+  // 纯内存对比，不记已读状态：下次刷新如没新事件 → 0 条，有新事件 → N 条。
+  // 仅在服务器数据刷新时重新计数；过滤 chip 点击触发的本地 re-render 不重算，
+  // 否则用户切 filter 就会看到徽标归零。
+  if (isRefresh) {
+    const currentIds = new Set(recentAll.map((e) => e.id));
+    const newCount = state.prevAlertIds === null
+      ? recentAll.length
+      : recentAll.filter((e) => !state.prevAlertIds.has(e.id)).length;
+    state.prevAlertIds = currentIds;
+    $("#alert-bar-count").textContent = newCount;
+    $("#alert-count").textContent = newCount;
+  }
 
   if (recentAll.length === 0) {
     bar.hidden = true;
     badge.hidden = true;
     return;
   }
+  // 徽标/自动展开只在实际有新增时触发（或首次渲染）；过滤 chip 点击不改变展开状态
+  const displayedCount = parseInt($("#alert-bar-count").textContent) || 0;
   bar.hidden = false;
-  badge.hidden = newCount === 0;
-  if (newCount > 0 && !bar.dataset.userToggled) bar.open = true;
+  badge.hidden = displayedCount === 0;
+  if (isRefresh && displayedCount > 0 && !bar.dataset.userToggled) bar.open = true;
 
   const recent = recentAll.filter(alertMatchesFilter);
   const f = state.alertFilter;
@@ -233,23 +235,9 @@ function renderAlertBar(alerts) {
     b.addEventListener("click", (ev) => {
       ev.stopPropagation();
       state.alertFilter[b.dataset.f] = b.dataset.v;
-      renderAlertBar(state.alertData);
+      renderAlertBar(state.alertData, { isRefresh: false });
     });
   });
-
-  // 渲染 3 秒后把 lastSeen 标记到"当前最新事件时间戳"，下一次渲染这些就不再算新消息。
-  // 3s 是让用户有足够时间看到红点，再"自动已读"—— 不用点击。
-  if (newCount > 0) {
-    const latest = recentAll
-      .map((e) => e.created_at)
-      .filter(Boolean)
-      .sort()
-      .pop();
-    if (latest) {
-      clearTimeout(renderAlertBar._markTimer);
-      renderAlertBar._markTimer = setTimeout(() => setLastSeenTs(latest), 3000);
-    }
-  }
 }
 
 // ── Panel 1 · 发布 ──
