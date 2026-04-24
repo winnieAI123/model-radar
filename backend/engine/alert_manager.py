@@ -89,32 +89,50 @@ def send_p0_alerts() -> dict:
             record_status("alert_p0", success=True)
             return result
 
-        # Bootstrap 过滤：首次扫描某 org 时，全部存量仓库会被判成 new_repo P0（冷启动误报）。
-        # 借鉴 weekly_report.py:79-101 —— 与该 org 的 first_scan 时间相差 <5min 的 new_repo/new_release 直接标 bootstrap_skipped。
+        # Bootstrap 过滤：首次扫描会把全部存量条目当"新增"（冷启动误报）。
+        # - new_repo / new_release：按 org 对齐 github_snapshots.first_at
+        # - new_model_on_board：按 source 对齐 leaderboard_snapshots.first_at（借鉴 weekly_report.py:79-115）
+        # 同批标成 alerted=1 + alert_status='bootstrap_skipped'，不发邮件。
         with get_conn() as conn:
-            scan_rows = conn.execute(
+            gh_scan = conn.execute(
                 "SELECT org, MIN(scraped_at) AS first_at FROM github_snapshots GROUP BY org"
             ).fetchall()
-        first_scan = {r["org"]: r["first_at"] for r in scan_rows}
+            lb_scan = conn.execute(
+                "SELECT source, MIN(scraped_at) AS first_at FROM leaderboard_snapshots GROUP BY source"
+            ).fetchall()
+        first_scan_gh = {r["org"]: r["first_at"] for r in gh_scan}
+        first_scan_lb = {r["source"]: r["first_at"] for r in lb_scan}
+
+        def _within_bootstrap_window(created_at: str, first_at: str | None) -> bool:
+            if not first_at:
+                return False
+            try:
+                t_event = datetime.fromisoformat(created_at)
+                t_first = datetime.fromisoformat(first_at)
+                return abs((t_event - t_first).total_seconds()) < 300
+            except Exception:
+                return False
 
         real_events: list[dict] = []
         bootstrap_ids: list[int] = []
         for e in events:
-            if e["event_type"] in ("new_repo", "new_release"):
+            et = e["event_type"]
+            if et in ("new_repo", "new_release"):
                 try:
                     org = (json.loads(e.get("detail_json") or "{}") or {}).get("org")
                 except Exception:
                     org = None
-                first_at = first_scan.get(org)
-                if first_at:
-                    try:
-                        t_event = datetime.fromisoformat(e["created_at"])
-                        t_first = datetime.fromisoformat(first_at)
-                        if abs((t_event - t_first).total_seconds()) < 300:
-                            bootstrap_ids.append(e["id"])
-                            continue
-                    except Exception:
-                        pass
+                if _within_bootstrap_window(e["created_at"], first_scan_gh.get(org)):
+                    bootstrap_ids.append(e["id"])
+                    continue
+            elif et == "new_model_on_board":
+                # source 形如 "leaderboard:aa" → 剥前缀对齐 leaderboard_snapshots.source
+                src = e.get("source") or ""
+                if src.startswith("leaderboard:"):
+                    src = src[len("leaderboard:"):]
+                if _within_bootstrap_window(e["created_at"], first_scan_lb.get(src)):
+                    bootstrap_ids.append(e["id"])
+                    continue
             real_events.append(e)
 
         if bootstrap_ids:

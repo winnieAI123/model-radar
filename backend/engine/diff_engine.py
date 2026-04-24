@@ -95,9 +95,12 @@ def _diff_leaderboard(conn, source: str, category: str) -> int:
             # 首次上榜
             title = f"{model} 首次进入 {source} {category} 榜单（排名 {new_rank}）"
             key = f"new_on_board:{source}:{category}:{model}"
+            # Top 10 首次进榜升 P0（值得邮件推送）。11+ 保持 P2 静默归档，不纳入 alert 流。
+            # 2026-04-24 用户反馈：grok-imagine-image / reve-v1.5 / mai-image-2 进 text_to_image Top 10 没邮件。
+            # bootstrap 首次扫描的 new_model_on_board 由 alert_manager 冷启动过滤拦截，不会批量误报。
             if _insert_event(conn,
                              event_type="new_model_on_board",
-                             severity="P1" if new_rank <= 10 else "P2",
+                             severity="P0" if new_rank <= 10 else "P2",
                              source=f"leaderboard:{source}",
                              title=title,
                              detail={"category": category, "new_rank": new_rank},
