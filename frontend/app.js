@@ -6,6 +6,8 @@ const state = {
   lbTab: "llm",                       // llm | t2i | t2v | i2v | extras
   lbSource: 0,                        // 当前 tab 下的 source 索引
   lbData: null,                       // 缓存最近一次 dashboard.leaderboards
+  alertFilter: { modality: "all", openness: "all" },  // 关键信号 panel 过滤器
+  alertData: null,                    // 缓存最近一次 dashboard.alerts 用于客户端过滤
 };
 
 async function jfetch(url, opts = {}) {
@@ -56,7 +58,52 @@ function setUpdated(sel, iso) {
 }
 
 // ── Alerts 顶部横条 ──
+
+// 开/闭源 org 分类。只对高置信目标打 tag；未知的不打 tag（避免误导）。
+const CLOSED_ORGS = new Set([
+  "openai", "anthropic", "google", "google-deepmind", "deepmind",
+  "xai", "midjourney", "ideogram", "runway", "pika", "cohere",
+]);
+const OPEN_ORGS = new Set([
+  "deepseek-ai", "moonshotai", "qwenlm", "thudm", "meta-llama",
+  "mistralai", "stepfun-ai", "minimax-ai", "alibaba-nlp", "01-ai",
+  "baidu", "tencent", "xtuner", "internlm",
+]);
+const CLOSED_BLOG_SOURCES = new Set([
+  "blog_openai", "blog_anthropic", "blog_google", "blog_xai", "blog_google_deepmind",
+]);
+const OPEN_BLOG_SOURCES = new Set([
+  "blog_deepseek", "blog_moonshot", "blog_qwen", "blog_meta",
+]);
+
+// 多模态关键词：命中即 multimodal，否则 text
+const MULTIMODAL_RE = /\b(image|video|audio|vision|multi[-\s]?modal|sora|veo[-\s]?\d|kling|flux|midjourney|ideogram|imagen|pika|runway|nano[-\s]?banana|dall[-\s]?e|hunyuan[-\s]?video|wan[-\s]?\d|seedream|seedance|gen[-\s]?[3-9])|混元视频|可灵|即梦/i;
+
+function classifyAlert(e) {
+  const src = (e.source || "").toLowerCase();
+  const detail = e.detail || {};
+  const org = (detail.org || detail.owner || "").toLowerCase();
+  const text = `${e.model_name || ""} ${e.title || ""} ${detail.repo_name || ""}`;
+
+  let openness = null;
+  if (CLOSED_BLOG_SOURCES.has(src) || CLOSED_ORGS.has(org)) openness = "closed";
+  else if (OPEN_BLOG_SOURCES.has(src) || OPEN_ORGS.has(org) || src === "hf" || src === "github") openness = "open";
+
+  const modality = MULTIMODAL_RE.test(text) ? "multimodal" : "text";
+  return { modality, openness };
+}
+
+function alertMatchesFilter(e) {
+  const f = state.alertFilter;
+  const { modality, openness } = classifyAlert(e);
+  if (f.modality !== "all" && modality !== f.modality) return false;
+  // openness==null 的事件 openness filter 为 all 时通过，其他情况下不显示（避免误归类）
+  if (f.openness !== "all" && openness !== f.openness) return false;
+  return true;
+}
+
 function renderAlertBar(alerts) {
+  state.alertData = alerts;
   const count = alerts?.pending_count || 0;
   const bar = $("#alert-bar");
   const badge = $("#alert-badge");
@@ -71,33 +118,47 @@ function renderAlertBar(alerts) {
   badge.hidden = false;
   if (!bar.dataset.userToggled) bar.open = true;
 
-  const recent = alerts.recent || [];
-  $("#alert-list").innerHTML = recent.map((e) => {
-    const link = e.detail?.url || e.detail?.html_url;
-    const linkHtml = link ? ` <a href="${esc(link)}" target="_blank" rel="noopener">🔗</a>` : "";
-    return `
-      <div class="alert-item" data-id="${e.id}">
-        <span class="sev ${esc(e.severity)}">${esc(e.severity)}</span>
-        <div>
-          <div>${esc(e.title)}${linkHtml}</div>
-          <div class="meta-line">${esc(e.event_type)} · ${esc(e.source)} · ${relTime(e.created_at)}</div>
-        </div>
-        <button class="ack-btn" data-ack="${e.id}">✓ 已读</button>
-      </div>`;
-  }).join("");
+  const recent = (alerts.recent || []).filter(alertMatchesFilter);
+  const f = state.alertFilter;
+  const filterRow = `
+    <div class="alert-filter-row">
+      <span class="filter-label">模态</span>
+      <button class="filter-chip ${f.modality === 'all' ? 'active' : ''}" data-f="modality" data-v="all">全部</button>
+      <button class="filter-chip ${f.modality === 'text' ? 'active' : ''}" data-f="modality" data-v="text">文本</button>
+      <button class="filter-chip ${f.modality === 'multimodal' ? 'active' : ''}" data-f="modality" data-v="multimodal">多模态</button>
+      <span class="filter-sep">·</span>
+      <span class="filter-label">开源</span>
+      <button class="filter-chip ${f.openness === 'all' ? 'active' : ''}" data-f="openness" data-v="all">全部</button>
+      <button class="filter-chip ${f.openness === 'open' ? 'active' : ''}" data-f="openness" data-v="open">开源</button>
+      <button class="filter-chip ${f.openness === 'closed' ? 'active' : ''}" data-f="openness" data-v="closed">闭源</button>
+    </div>`;
 
-  $("#alert-list").querySelectorAll("[data-ack]").forEach((b) => {
-    b.addEventListener("click", async (ev) => {
+  const itemsHtml = recent.length === 0
+    ? `<div class="empty" style="padding:20px">当前过滤下无匹配项</div>`
+    : recent.map((e) => {
+        const { modality, openness } = classifyAlert(e);
+        const link = e.detail?.url || e.detail?.html_url;
+        const linkHtml = link ? ` <a href="${esc(link)}" target="_blank" rel="noopener">🔗</a>` : "";
+        const modChip = `<span class="tag-chip tag-mod-${modality}">${modality === 'multimodal' ? '多模态' : '文本'}</span>`;
+        const openChip = openness ? `<span class="tag-chip tag-open-${openness}">${openness === 'open' ? '开源' : '闭源'}</span>` : "";
+        return `
+          <div class="alert-item" data-id="${e.id}">
+            <span class="sev ${esc(e.severity)}">${esc(e.severity)}</span>
+            <div>
+              <div>${esc(e.title)}${linkHtml}</div>
+              <div class="alert-tags">${modChip}${openChip}</div>
+              <div class="meta-line">${esc(e.event_type)} · ${esc(e.source)} · ${relTime(e.created_at)}</div>
+            </div>
+          </div>`;
+      }).join("");
+
+  $("#alert-list").innerHTML = filterRow + itemsHtml;
+
+  $("#alert-list").querySelectorAll(".filter-chip[data-f]").forEach((b) => {
+    b.addEventListener("click", (ev) => {
       ev.stopPropagation();
-      const id = b.dataset.ack;
-      try {
-        await jfetch(`/api/alerts/${id}/ack`, { method: "POST" });
-        b.closest(".alert-item").remove();
-        const newCount = Math.max(0, (parseInt($("#alert-count").textContent) || 1) - 1);
-        $("#alert-count").textContent = newCount;
-        $("#alert-bar-count").textContent = newCount;
-        if (newCount === 0) { bar.hidden = true; badge.hidden = true; }
-      } catch (e) { console.error("ack", e); }
+      state.alertFilter[b.dataset.f] = b.dataset.v;
+      renderAlertBar(state.alertData);
     });
   });
 }
