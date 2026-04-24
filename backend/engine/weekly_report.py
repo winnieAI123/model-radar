@@ -20,6 +20,7 @@ import logging
 from datetime import datetime, timedelta
 from html import escape
 
+from backend.collectors import openrouter as openrouter_collector
 from backend.db import get_conn, record_status
 from backend.engine import (
     alias_learner,
@@ -637,6 +638,9 @@ def generate(days: int = 7) -> dict:
     stats             = _safe_call("stats",        _gather_source_stats, period_start_iso, events) or {"leaderboard_rows": 0, "new_releases": 0, "total_events": 0}
     leaderboards      = _safe_call("leaderboards", leaderboard_digest.generate, days=days) or {}
     hf                = _safe_call("hf",           hf_digest.generate, days=days) or {"top": [], "as_of": None, "any_baseline": False}
+    # 周报前强制抓一次 OR：collector 7d 间隔可能和周一不对齐，防止周报读到一周前的快照。
+    # collect() 内部是 DELETE+INSERT，重复调用幂等；失败时 digest 仍能读 DB 里的旧数据兜底。
+    _safe_call("openrouter_refresh", openrouter_collector.collect)
     openrouter        = _safe_call("openrouter",   openrouter_digest.generate) or {"top": [], "week_date": None, "any_previous": False, "summary_md": "", "used_llm": False}
     releases          = _safe_call("releases",     release_digest.generate, days=days) or {"items": [], "used_llm": False, "kept_count": 0, "noise_count": 0, "dedup_count": 0}
     opinions          = _safe_call("opinions",     reddit_opinions.generate, days=days) or {"models": [], "fallback_md": "(opinions 模块异常)"}
