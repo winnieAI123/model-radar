@@ -178,11 +178,18 @@ def healthz():
 
 
 # 静态资源 + 首页
+# 首页挂 require_auth：Chrome/Safari 对 fetch() 的 401 不再弹 Basic Auth 对话框，
+# 只有主文档本身 401 才弹。如果 / 不鉴权，用户会看到"加载中..."永远转，因为 /api/*
+# fetch 都 silently 401。/static/* 仍放行（CSS/JS 无秘密），浏览器拿到 / 的 creds 后
+# 后续 /api/* 自动带 Authorization。
 if config.FRONTEND_DIR.exists():
+    from backend.api.auth import require_auth as _require_auth
+    from fastapi import Depends
+
     app.mount("/static", StaticFiles(directory=str(config.FRONTEND_DIR)), name="static")
 
     @app.get("/")
-    def index():
+    def index(_: str = Depends(_require_auth)):
         return FileResponse(config.FRONTEND_DIR / "index.html")
 
 
