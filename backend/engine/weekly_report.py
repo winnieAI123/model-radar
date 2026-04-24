@@ -49,9 +49,9 @@ def _iso_week(dt: datetime | None = None) -> str:
 
 def _gather_events(period_start_iso: str, limit: int = 20) -> list[dict]:
     """拉 P0/P1 事件。**冷启动过滤**：
-    当 event_type 是 new_repo/new_release 时，要检查这个 repo 所属 org 是否在该 event 之前已经被扫过。
-    如果没有——说明这是系统第一次扫到这个 org 时把所有存量 repo/release 都当"新增"产生的 bootstrap 误报，
-    周报里要过滤掉。真正"本周新增"是指该 org 已经扫过若干次之后才出现的 repo/release。
+    - new_repo/new_release：按该 repo 所属 org 在 github_snapshots 里的首次扫描时间过滤。
+    - new_model_on_board：按该 leaderboard source 在 leaderboard_snapshots 里的首次扫描时间过滤。
+    系统第一次扫某 org/source 会把所有存量条目当"新增"，这些都是 bootstrap 误报，周报里要排除。
     """
     with get_conn() as conn:
         rows = conn.execute(
@@ -74,38 +74,51 @@ def _gather_events(period_start_iso: str, limit: int = 20) -> list[dict]:
         ).fetchall()
         first_scan = {r["org"]: r["first_at"] for r in scan_rows}
 
+        # 预计算每个 leaderboard source 的首次扫描时间（覆盖 new_model_on_board 类事件）
+        lb_rows = conn.execute(
+            "SELECT source, MIN(scraped_at) AS first_at FROM leaderboard_snapshots GROUP BY source"
+        ).fetchall()
+        lb_first_scan = {r["source"]: r["first_at"] for r in lb_rows}
+
+    def _is_bootstrap(created_at: str, first_at: str | None) -> bool:
+        if not first_at:
+            return False
+        if created_at <= first_at:
+            return True
+        try:
+            t1 = datetime.fromisoformat(created_at)
+            t2 = datetime.fromisoformat(first_at)
+            return abs((t1 - t2).total_seconds()) < 300
+        except Exception:
+            return False
+
     filtered = []
     bootstrap_skipped = 0
     for e in events:
         if e["event_type"] in ("new_repo", "new_release"):
-            # 从 detail_json 里拿 org
             org = None
             try:
                 detail = json.loads(e.get("detail_json") or "{}")
                 org = detail.get("org")
             except Exception:
-                detail = {}
-            if org:
-                org_first = first_scan.get(org)
-                # 该事件创建时间 ≤ org 首次扫描时间 + 10 分钟 → bootstrap 扫描期的误报
-                if org_first and e["created_at"] <= org_first:
-                    bootstrap_skipped += 1
-                    continue
-                # created_at 与 org_first 差 <5min 说明还是同一次 bootstrap 扫描
-                try:
-                    t1 = datetime.fromisoformat(e["created_at"])
-                    t2 = datetime.fromisoformat(org_first) if org_first else None
-                    if t2 and abs((t1 - t2).total_seconds()) < 300:
-                        bootstrap_skipped += 1
-                        continue
-                except Exception:
-                    pass
+                pass
+            if org and _is_bootstrap(e["created_at"], first_scan.get(org)):
+                bootstrap_skipped += 1
+                continue
+        elif e["event_type"] == "new_model_on_board":
+            # source 形如 "leaderboard:aa" — 剥前缀对上 leaderboard_snapshots.source
+            src = e.get("source") or ""
+            if src.startswith("leaderboard:"):
+                src = src[len("leaderboard:"):]
+            if _is_bootstrap(e["created_at"], lb_first_scan.get(src)):
+                bootstrap_skipped += 1
+                continue
         filtered.append(e)
         if len(filtered) >= limit:
             break
 
     if bootstrap_skipped:
-        logger.info("[Weekly] 冷启动过滤：跳过 %d 条 bootstrap 扫描产生的 new_repo/new_release 事件",
+        logger.info("[Weekly] 冷启动过滤：跳过 %d 条 bootstrap 误报事件（含 new_repo/new_release/new_model_on_board）",
                     bootstrap_skipped)
     return filtered
 
@@ -229,6 +242,29 @@ def _render_html(data: dict) -> str:
     elif theme_items:
         parts.append(f"社区围绕 {theme_items[0].get('title') or ''}")
 
+    # 席位多的：跨所有领域所有平台聚合 Top 20 家族占比，点出最显著那家（≥5 席才提）
+    all_fams: dict[str, int] = {}
+    for _domain in (data["leaderboards"] or {}).values():
+        for _p in _domain.get("platforms") or []:
+            for fname, fcount in (_p.get("family_counts") or []):
+                all_fams[fname] = all_fams.get(fname, 0) + fcount
+    if all_fams:
+        top_fam_name, top_fam_count = max(all_fams.items(), key=lambda x: x[1])
+        if top_fam_count >= 5:
+            parts.append(f"{top_fam_name} 系列跨榜单占 {top_fam_count} 席")
+
+    # 黑马登顶：rank_crowned 事件 — 某模型首次冲到某榜首位
+    crowned = [e for e in data["events"] if e.get("event_type") == "rank_crowned"]
+    if crowned:
+        first_title = (crowned[0].get("title") or "").strip()
+        if first_title:
+            parts.append(f"黑马登顶：{first_title[:40]}" + ("…" if len(first_title) > 40 else ""))
+
+    # 博主测评：本周中文公众号产出的相关文章数 (≥3 篇才提)
+    w_count = (data.get("wechat") or {}).get("article_count", 0) or 0
+    if w_count >= 3:
+        parts.append(f"中文博主产出 {w_count} 篇相关测评")
+
     digest_html = ""
     if parts:
         sentence = "；".join(parts) + "。"
@@ -275,6 +311,20 @@ def _render_html(data: dict) -> str:
     releases_html = "".join(paras) if paras else f'<p style="color:{FAINT};font-style:italic;font-family:{SERIF};">本周无新发布。</p>'
 
     # --- III · Leaderboards ---
+    def _row_html(it):
+        rank = it["rank"]
+        change = it.get("change") or ""
+        chg_html = f'<span style="font-family:{SANS};font-size:10px;color:{ACCENT};margin-left:6px;font-weight:600;">{_esc(change)}</span>' if change else ""
+        score = it.get("score")
+        score_html = f'<span style="font-family:{SANS};font-size:11px;color:{MUTED};">{score:.1f}</span>' if score is not None else ""
+        return f"""
+        <tr>
+          <td style="padding:6px 0;font-family:{SERIF};font-size:12px;color:{FAINT};width:24px;vertical-align:top;">{rank}.</td>
+          <td class="mr-name" style="padding:6px 0;font-family:{SERIF};font-size:14px;color:{FG};">{_esc(it['model_name'])}{chg_html}</td>
+          <td style="padding:6px 0;text-align:right;vertical-align:top;">{score_html}</td>
+        </tr>
+        """
+
     lb_blocks = []
     for domain_key, d in data["leaderboards"].items():
         platforms_html = []
@@ -283,27 +333,43 @@ def _render_html(data: dict) -> str:
             src_label = {"lmarena": "LMArena", "aa": "Artificial Analysis", "superclue": "SuperCLUE"}.get(src, src)
             public_url = p.get("public_url") or ""
             items_p = p.get("top_n") or []
-            rows_html = []
-            for it in items_p[:20]:
-                rank = it["rank"]
-                change = it.get("change") or ""
-                chg_html = f'<span style="font-family:{SANS};font-size:10px;color:{ACCENT};margin-left:6px;font-weight:600;">{_esc(change)}</span>' if change else ""
-                score = it.get("score")
-                score_html = f'<span style="font-family:{SANS};font-size:11px;color:{MUTED};">{score:.1f}</span>' if score is not None else ""
-                rows_html.append(f"""
-                <tr>
-                  <td style="padding:6px 0;font-family:{SERIF};font-size:12px;color:{FAINT};width:24px;vertical-align:top;">{rank}.</td>
-                  <td class="mr-name" style="padding:6px 0;font-family:{SERIF};font-size:14px;color:{FG};">{_esc(it['model_name'])}{chg_html}</td>
-                  <td style="padding:6px 0;text-align:right;vertical-align:top;">{score_html}</td>
-                </tr>
-                """)
+            # Top 5 外显；6-20 折叠在 <details> 里（Gmail / Apple Mail 支持；Outlook 会 fallback 到全展开，
+            # 也能接受，不会丢信息）。
+            top5 = items_p[:5]
+            rest = items_p[5:]
+            top5_html = "".join(_row_html(it) for it in top5)
+            rest_html = "".join(_row_html(it) for it in rest)
+            more_html = ""
+            if rest_html:
+                more_html = f"""
+                <details style="margin-top:10px;">
+                  <summary style="font-family:{SANS};font-size:11px;color:{MUTED};cursor:pointer;letter-spacing:0.05em;padding:6px 0;border-top:1px dotted {RULE};list-style:none;">
+                    &plus; 展开第 6-{5 + len(rest)} 名
+                  </summary>
+                  <table style="width:100%;border-collapse:collapse;margin-top:6px;">{rest_html}</table>
+                </details>
+                """
+
+            # 家族占比小行（只显示 ≥2 席的家族，最多 4 个）
+            fams = p.get("family_counts") or []
+            fams_top = [(n, c) for n, c in fams if c >= 2][:4]
+            family_html = ""
+            if fams_top:
+                chips = "".join(
+                    f'<span style="display:inline-block;font-family:{SANS};font-size:10px;color:{MUTED};background:#ffffff;border:1px solid {RULE};padding:2px 8px;margin:0 6px 4px 0;letter-spacing:0.02em;">{_esc(name)}&nbsp;<strong style="color:{FG};">{c}</strong></span>'
+                    for name, c in fams_top
+                )
+                family_html = f'<div style="margin:6px 0 10px 0;line-height:1.6;">{chips}</div>'
+
             label_html = (
                 f'<a href="{_esc(public_url)}" style="color:{MUTED};text-decoration:none;border-bottom:1px solid {RULE};">{_esc(src_label)} &rarr;</a>'
                 if public_url else _esc(src_label)
             )
             platforms_html.append(f"""
               <div style="font-family:{SERIF};font-style:italic;font-size:13px;color:{MUTED};margin-bottom:10px;letter-spacing:0.02em;">{label_html}</div>
-              <table style="width:100%;border-collapse:collapse;">{''.join(rows_html)}</table>
+              {family_html}
+              <table style="width:100%;border-collapse:collapse;">{top5_html}</table>
+              {more_html}
             """)
         summary = d.get("summary_md", "")
         domain_summary = f"""
