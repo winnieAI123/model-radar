@@ -132,9 +132,9 @@ def _register_jobs():
     scheduler.add_job(_safe(_run_mini_digest, "mini_digest"),
                       IntervalTrigger(minutes=config.INTERVAL_MINI_DIGEST_MIN),
                       id="mini_digest", max_instances=1, coalesce=True)
-    # 周一 09:00 Asia/Shanghai 发周报
+    # 周五 19:00 Asia/Shanghai 发周报
     scheduler.add_job(_safe(_run_weekly, "weekly_report"),
-                      CronTrigger(day_of_week="mon", hour=9, minute=0,
+                      CronTrigger(day_of_week="fri", hour=19, minute=0,
                                   timezone="Asia/Shanghai"),
                       id="weekly_report", max_instances=1, coalesce=True)
 

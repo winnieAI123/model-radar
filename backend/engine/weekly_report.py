@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 from html import escape
 
 from backend.collectors import openrouter as openrouter_collector
+from backend.collectors import wechat_rss as wechat_collector
 from backend.db import get_conn, record_status
 from backend.engine import (
     alias_learner,
@@ -30,7 +31,7 @@ from backend.engine import (
     reddit_opinions,
     reddit_themes,
     release_digest,
-    wechat_themes,
+    wechat_digest,
 )
 from backend.utils.email_sender import send_email
 
@@ -217,59 +218,103 @@ def _render_html(data: dict) -> str:
                 return s.split(sep)[0]
         return s
 
+    # 开头概览：覆盖 II-VIII 每一节的核心内容，让读者只读开头就能掌握本周全貌。
+    # 每节 1-2 个短分句，用「；」连接成一段。目标长度 350-500 字。
+    # 2026-04-24 用户反馈：开头太薄，尤其 WeChat 部分要交代每类讲了什么。
     parts = []
+
+    # § II · Releases
     rel_items = data["releases"].get("items") or []
     if rel_items:
-        names = "、".join(f"{r['org']}/{r['repo_name']}" for r in rel_items[:2])
-        parts.append(f"本周 {len(rel_items)} 款新发布（{names}）")
+        names = "、".join(f"{r['org']}/{r['repo_name']}" for r in rel_items[:3])
+        parts.append(f"新模型发布 {len(rel_items)} 款（{names}）")
 
+    # § III · Leaderboards（取首个领域 summary 首句 + 跨榜单家族占比）
     lb_first_sum = next((v.get("summary_md") for v in data["leaderboards"].values() if v.get("summary_md")), None)
-    if lb_first_sum:
-        parts.append(_first_clause(lb_first_sum))
-
-    or_sum = data["openrouter"].get("summary_md")
-    hf_sum = data["hf"].get("summary_md")
-    if or_sum:
-        parts.append(_first_clause(or_sum))
-    elif hf_sum:
-        parts.append(f"HF 趋势：{_first_clause(hf_sum)}")
-
-    op_models = data["opinions"].get("models") or []
-    theme_items = data["themes"].get("themes") or []
-    if op_models:
-        top_names = "、".join(m.get("model") or "" for m in op_models[:2])
-        parts.append(f"讨论集中在 {top_names}")
-    elif theme_items:
-        parts.append(f"社区围绕 {theme_items[0].get('title') or ''}")
-
-    # 席位多的：跨所有领域所有平台聚合 Top 20 家族占比，点出最显著那家（≥5 席才提）
     all_fams: dict[str, int] = {}
     for _domain in (data["leaderboards"] or {}).values():
         for _p in _domain.get("platforms") or []:
             for fname, fcount in (_p.get("family_counts") or []):
                 all_fams[fname] = all_fams.get(fname, 0) + fcount
+    lb_bits = []
+    if lb_first_sum:
+        lb_bits.append(_first_clause(lb_first_sum))
     if all_fams:
         top_fam_name, top_fam_count = max(all_fams.items(), key=lambda x: x[1])
         if top_fam_count >= 5:
-            parts.append(f"{top_fam_name} 系列跨榜单占 {top_fam_count} 席")
+            lb_bits.append(f"{top_fam_name} 系列跨榜单占 {top_fam_count} 席")
+    if lb_bits:
+        parts.append(f"榜单方面，{'，'.join(lb_bits)}")
 
-    # 黑马登顶：rank_crowned 事件 — 某模型首次冲到某榜首位
+    # 黑马登顶事件 — 独立一句
     crowned = [e for e in data["events"] if e.get("event_type") == "rank_crowned"]
     if crowned:
         first_title = (crowned[0].get("title") or "").strip()
         if first_title:
             parts.append(f"黑马登顶：{first_title[:40]}" + ("…" if len(first_title) > 40 else ""))
 
-    # 博主测评：本周中文公众号产出的相关文章数 (≥3 篇才提)
+    # § IV · HuggingFace 趋势
+    hf_sum = data["hf"].get("summary_md")
+    if hf_sum:
+        parts.append(f"HuggingFace 上 {_first_clause(hf_sum)}")
+
+    # § V · OpenRouter 调用量（尽量带上 Top3 + 暴涨/下滑关键点）
+    or_sum = data["openrouter"].get("summary_md")
+    if or_sum:
+        or_brief = _first_clause(or_sum)
+        if len(or_brief) < 40:
+            rest = (or_sum or "").split("。", 1)
+            if len(rest) > 1:
+                nxt = _first_clause(rest[1])
+                if nxt and len(or_brief) + len(nxt) < 140:
+                    or_brief = or_brief + "。" + nxt
+        parts.append(or_brief[:140])
+
+    # § VI · 社区声音（Reddit 讨论集中在哪些模型）
+    op_models = data["opinions"].get("models") or []
+    if op_models:
+        top_names = "、".join(m.get("model") or "" for m in op_models[:3])
+        parts.append(f"Reddit 讨论集中在 {top_names}")
+
+    # § VII · 本周热议（取 Top 2-3 主题标题）
+    theme_items = data["themes"].get("themes") or []
+    if theme_items:
+        theme_titles = "、".join((t.get("title") or "")[:20] for t in theme_items[:3] if t.get("title"))
+        if theme_titles:
+            parts.append(f"热议主题 {theme_titles}")
+
+    # § VIII · 中文社区观察 — 每类给 name + 关键实体/主题（从 summary 抠首句）
+    # 用户要求：看开头就能知道博主聊了什么，而不只是"产出 N 篇"
     w_count = (data.get("wechat") or {}).get("article_count", 0) or 0
-    if w_count >= 3:
-        parts.append(f"中文博主产出 {w_count} 篇相关测评")
+    w_cats = (data.get("wechat") or {}).get("categories") or []
+    if w_count >= 3 and w_cats:
+        import re as _re_local
+        cat_briefs = []
+        for c in w_cats[:3]:
+            name = (c.get("name") or "").strip()
+            sm = _re_local.sub(r"\[\d+\]", "", c.get("summary") or "").strip()
+            # 开头提示取 ~120 字，在最近的自然停顿截断（让老板只看开头就能看到具体数字/对比/博主名）
+            hint = sm[:120]
+            for sep in ("。", "；"):
+                idx = hint.rfind(sep)
+                if idx >= 50:
+                    hint = hint[:idx]
+                    break
+            hint = hint.strip("，。； ")
+            if name and hint:
+                cat_briefs.append(f"{name}（{hint}）")
+            elif name:
+                cat_briefs.append(name)
+        if cat_briefs:
+            parts.append(f"中文博主 {w_count} 篇文章围绕 {'、'.join(cat_briefs)}")
+        else:
+            parts.append(f"中文博主产出 {w_count} 篇相关测评")
 
     digest_html = ""
     if parts:
         sentence = "；".join(parts) + "。"
         digest_html = f"""
-        <p style="font-family:{SERIF};font-size:17px;color:{FG};line-height:1.9;margin:0 0 28px 0;">
+        <p style="font-family:{SERIF};font-size:16px;color:{FG};line-height:1.95;margin:0 0 28px 0;">
           {_esc(sentence)}
         </p>
         """
@@ -350,24 +395,14 @@ def _render_html(data: dict) -> str:
                 </details>
                 """
 
-            # 家族占比小行（只显示 ≥2 席的家族，最多 4 个）
-            fams = p.get("family_counts") or []
-            fams_top = [(n, c) for n, c in fams if c >= 2][:4]
-            family_html = ""
-            if fams_top:
-                chips = "".join(
-                    f'<span style="display:inline-block;font-family:{SANS};font-size:10px;color:{MUTED};background:#ffffff;border:1px solid {RULE};padding:2px 8px;margin:0 6px 4px 0;letter-spacing:0.02em;">{_esc(name)}&nbsp;<strong style="color:{FG};">{c}</strong></span>'
-                    for name, c in fams_top
-                )
-                family_html = f'<div style="margin:6px 0 10px 0;line-height:1.6;">{chips}</div>'
-
+            # 家族占比 chip 行已删除：开头总结已经有"X 系列跨榜单占 N 席"，
+            # 单 platform 再罗列反而显乱（2026-04-24 用户反馈）。
             label_html = (
                 f'<a href="{_esc(public_url)}" style="color:{MUTED};text-decoration:none;border-bottom:1px solid {RULE};">{_esc(src_label)} &rarr;</a>'
                 if public_url else _esc(src_label)
             )
             platforms_html.append(f"""
               <div style="font-family:{SERIF};font-style:italic;font-size:13px;color:{MUTED};margin-bottom:10px;letter-spacing:0.02em;">{label_html}</div>
-              {family_html}
               <table style="width:100%;border-collapse:collapse;">{top5_html}</table>
               {more_html}
             """)
@@ -547,30 +582,64 @@ def _render_html(data: dict) -> str:
         """)
     themes_html = "".join(t_blocks) if t_blocks else f'<p style="font-family:{SERIF};font-style:italic;color:{FAINT};">{_esc(data["themes"].get("fallback_md") or "")}</p>'
 
-    # --- VIII · WeChat Themes ---
-    w_items = (data.get("wechat") or {}).get("themes") or []
+    # --- VIII · WeChat Digest（分类综述 + 脚注式文章引用） ---
+    # 段落里 [N] 替换为上标链接，点击跳原文。不显示文章标题。
+    import re as _re
+    _REF_PATTERN = _re.compile(r"\[(\d+)\]")
+
+    def _render_summary_with_refs(summary: str, refs: list[dict]) -> str:
+        """把 summary 里的 [1][2] 替换成 <sup><a>¹²</a></sup>，未命中的 [N] 直接去掉。"""
+        by_n = {r.get("n"): r for r in refs if r.get("n") is not None}
+
+        def _sub(m):
+            try:
+                n = int(m.group(1))
+            except Exception:
+                return ""
+            r = by_n.get(n)
+            if not r:
+                return ""
+            url = r.get("url") or ""
+            src = r.get("source") or ""
+            tip = _esc(src)
+            return (
+                f'<sup style="font-family:{SANS};font-size:10px;margin:0 1px;">'
+                f'<a href="{_esc(url)}" title="{tip}" '
+                f'style="color:{ACCENT};text-decoration:none;padding:0 2px;border:1px solid {RULE};border-radius:2px;">'
+                f'{n}</a></sup>'
+            )
+        # 先 escape 正文，再在 escape 后的字符串里替换 [N]（[N] 本身是 ASCII，escape 不影响）
+        escaped = _esc(summary)
+        return _REF_PATTERN.sub(_sub, escaped)
+
+    w_cats = (data.get("wechat") or {}).get("categories") or []
     w_blocks = []
-    for t in w_items:
-        articles = t.get("articles") or []
-        art_rows = []
-        for a in articles:
-            angle = a.get("angle") or ""
-            angle_html = f'<span style="color:{FG};">{_esc(angle)}</span>' if angle else ""
-            art_rows.append(
-                f'<div style="margin-top:8px;font-family:{SERIF};font-size:13px;color:{MUTED};line-height:1.7;">'
-                f'<span style="font-family:{SANS};font-size:11px;color:{FAINT};letter-spacing:0.04em;text-transform:uppercase;">{_esc(a.get("source") or "")}</span> '
-                f'&middot; <a href="{_esc(a.get("url") or "")}" style="color:{ACCENT};text-decoration:none;">{_esc((a.get("title") or "")[:80])}</a> '
-                f'{"&mdash; " + angle_html if angle_html else ""}'
+    for c in w_cats:
+        refs = c.get("refs") or []
+        summary_html = _render_summary_with_refs(c.get("summary") or "", refs)
+        # 来源索引：段落下方列出每个 [N] = 公众号名（不显示文章标题，保持简洁）
+        refs_line = ""
+        if refs:
+            chips = " &middot; ".join(
+                f'<a href="{_esc(r.get("url") or "")}" '
+                f'style="color:{MUTED};text-decoration:none;">'
+                f'<sup style="font-family:{SANS};font-size:9px;color:{ACCENT};">{r.get("n")}</sup>'
+                f'&nbsp;{_esc(r.get("source") or "")}</a>'
+                for r in refs
+            )
+            refs_line = (
+                f'<div style="margin-top:14px;padding-top:10px;border-top:1px dotted {RULE};'
+                f'font-family:{SANS};font-size:11px;color:{FAINT};line-height:1.8;letter-spacing:0.02em;">'
+                f'来源 &middot; {chips}'
                 f'</div>'
             )
-        arts_html = "".join(art_rows)
         w_blocks.append(f"""
         <div style="margin-bottom:40px;">
           <div style="font-family:{SERIF};font-size:19px;color:{FG};font-weight:700;margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid {RULE};">
-            {_esc(t.get('title') or '')}
+            {_esc(c.get('name') or '')}
           </div>
-          <p style="font-family:{SERIF};font-size:16px;color:{FG};line-height:1.9;margin:0;">{_esc(t.get('summary') or '')}</p>
-          {arts_html}
+          <p style="font-family:{SERIF};font-size:16px;color:{FG};line-height:1.9;margin:0;">{summary_html}</p>
+          {refs_line}
         </div>
         """)
     wechat_fallback = (data.get("wechat") or {}).get("fallback_md") or ""
@@ -648,9 +717,9 @@ def _persist(data: dict, html: str) -> None:
         "themes":         {"theme_count": len(data["themes"].get("themes") or []),
                            "post_count":  data["themes"].get("post_count", 0),
                            "used_llm":    data["themes"].get("used_llm", False)},
-        "wechat":         {"theme_count":   len((data.get("wechat") or {}).get("themes") or []),
-                           "article_count": (data.get("wechat") or {}).get("article_count", 0),
-                           "used_llm":      (data.get("wechat") or {}).get("used_llm", False)},
+        "wechat":         {"category_count": len((data.get("wechat") or {}).get("categories") or []),
+                           "article_count":  (data.get("wechat") or {}).get("article_count", 0),
+                           "used_llm":       (data.get("wechat") or {}).get("used_llm", False)},
         "alias_learner":  {"auto_accepted": len((data.get("alias_stats") or {}).get("auto_accepted") or []),
                            "pending_added": (data.get("alias_stats") or {}).get("pending_added", 0)},
     }, ensure_ascii=False)
@@ -707,6 +776,9 @@ def generate(days: int = 7) -> dict:
     # 周报前强制抓一次 OR：collector 7d 间隔可能和周一不对齐，防止周报读到一周前的快照。
     # collect() 内部是 DELETE+INSERT，重复调用幂等；失败时 digest 仍能读 DB 里的旧数据兜底。
     _safe_call("openrouter_refresh", openrouter_collector.collect)
+    # 同理刷一次 WeChat：它的 cadence 最慢（1440 min），周五 19:00 发报时可能差 23h。
+    # collector 走 INSERT OR IGNORE + 空 body_full 回填，重复调用幂等。
+    _safe_call("wechat_refresh", wechat_collector.collect)
     openrouter        = _safe_call("openrouter",   openrouter_digest.generate) or {"top": [], "week_date": None, "any_previous": False, "summary_md": "", "used_llm": False}
     releases          = _safe_call("releases",     release_digest.generate, days=days) or {"items": [], "used_llm": False, "kept_count": 0, "noise_count": 0, "dedup_count": 0}
     opinions          = _safe_call("opinions",     reddit_opinions.generate, days=days) or {"models": [], "fallback_md": "(opinions 模块异常)"}
@@ -715,7 +787,7 @@ def generate(days: int = 7) -> dict:
     # themes 过程里 LLM 识别的模型名也会走自动接受。
     alias_stats       = _safe_call("alias_learner", alias_learner.learn_from_reddit, days=days) or {}
     themes            = _safe_call("themes",        reddit_themes.generate, days=days) or {"themes": [], "post_count": 0, "used_llm": False, "fallback_md": "(themes 模块异常)"}
-    wechat            = _safe_call("wechat_themes", wechat_themes.generate, days=days) or {"themes": [], "article_count": 0, "used_llm": False, "fallback_md": "(wechat_themes 模块异常)"}
+    wechat            = _safe_call("wechat_digest", wechat_digest.generate, days=days) or {"categories": [], "article_count": 0, "used_llm": False, "fallback_md": "(wechat_digest 模块异常)"}
 
     return {
         "week_number":   week,

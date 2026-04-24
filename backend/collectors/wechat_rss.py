@@ -25,13 +25,39 @@ SUMMARY_TRUNC = 1000
 # 全文入库上限（字符）。微信长文极少超过这个，足够 LLM 提取任何维度；同时防止异常 RSS 把 DB 撑爆。
 BODY_FULL_MAX = 30000
 
-# 去 HTML 标签：把 content_html 剥离成纯文本供 diff_engine 使用
-_TAG_RE = re.compile(r"<[^>]+>")
+# WeWe-RSS 的 content_html 实际是整个微信页面 HTML（含 <script>/<style>），
+# 文章正文只在 <div id="js_content"> 内；早期版本直接剥标签会把 JS 源码留进 summary。
+# 这里先抽正文容器，再剥 script/style 块（含内部代码），最后剥普通标签。
+_SCRIPT_RE  = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.DOTALL | re.IGNORECASE)
+_TAG_RE     = re.compile(r"<[^>]+>")
+_WS_RE      = re.compile(r"\s+")
+_BODY_START = re.compile(r'<div[^>]*id="js_content"[^>]*>', re.IGNORECASE)
+_BODY_END_MARKERS = ("rich_media_tool", "rich_media_area_extra", "js_pc_qr_code")
+
+
+def _extract_wechat_body(html: str) -> str:
+    m = _BODY_START.search(html)
+    if not m:
+        return html
+    s = m.end()
+    end = len(html)
+    for mk in _BODY_END_MARKERS:
+        idx = html.find(mk, s)
+        if 0 < idx < end:
+            end = idx
+    return html[s:end]
+
 
 def _strip_html(s: str | None) -> str:
     if not s:
         return ""
-    return unescape(_TAG_RE.sub(" ", s)).strip()
+    if 'id="js_content"' in s:
+        s = _extract_wechat_body(s)
+    s = _SCRIPT_RE.sub(" ", s)
+    s = _TAG_RE.sub(" ", s)
+    s = unescape(s)
+    s = _WS_RE.sub(" ", s)
+    return s.strip()
 
 def _parse_published(date_str: str) -> str | None:
     """把 WeWe RSS 的 ISO 格式 (2026-04-22T02:13:25.000Z) 转成 SQLite datetime() 格式。"""
@@ -76,7 +102,22 @@ def _persist(conn, item) -> bool:
         """,
         (url, source, title, summary, body_full, published, matched),
     )
-    return cur.rowcount > 0
+    if cur.rowcount > 0:
+        return True
+
+    # 既有记录：若 body_full 曾因旧版 _strip_html 解析错误而为空 / 被污染（JS 源码），
+    # 用新抽取结果回填。不动 matched_model（人工可能改过）。
+    if body_full:
+        conn.execute(
+            """
+            UPDATE blog_posts
+               SET body_full = ?, summary = ?
+             WHERE url = ?
+               AND (body_full IS NULL OR body_full = '' OR body_full LIKE '%window.__wxWebEnv%')
+            """,
+            (body_full, summary, url),
+        )
+    return False
 
 def collect() -> dict:
     """抓取 WeWe RSS 接口的数据"""
