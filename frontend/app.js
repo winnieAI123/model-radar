@@ -122,11 +122,15 @@ function classifyAlert(e) {
   const org = (detail.org || detail.owner || "").toLowerCase();
   const text = `${e.model_name || ""} ${e.title || ""} ${detail.repo_name || ""}`;
 
-  // openness: 先看模型名（榜单事件没 org，只能靠这个）；兜底 org / blog 源。
-  let openness = opennessByName(text);
-  if (!openness) {
-    if (CLOSED_BLOG_SOURCES.has(src) || CLOSED_ORGS.has(org)) openness = "closed";
-    else if (OPEN_BLOG_SOURCES.has(src) || OPEN_ORGS.has(org) || src === "hf" || src === "github") openness = "open";
+  // openness: 博客/公众号文章本身是评论文本，不是模型实体，不判断开源闭源
+  // （2026-04-24：小米 MiMo 测评公众号文被误挂"闭源"黄徽，用户反馈）
+  let openness = null;
+  if (e.event_type !== "new_blog_post") {
+    openness = opennessByName(text);
+    if (!openness) {
+      if (CLOSED_BLOG_SOURCES.has(src) || CLOSED_ORGS.has(org)) openness = "closed";
+      else if (OPEN_BLOG_SOURCES.has(src) || OPEN_ORGS.has(org) || src === "hf" || src === "github") openness = "open";
+    }
   }
 
   // modality: detail.category 优先（榜单事件权威），没 category 时才靠模型名正则。
@@ -143,23 +147,50 @@ function alertMatchesFilter(e) {
   return true;
 }
 
+// event_type → 语义徽标（不再用 P0/P1 告警级别，避免"事故感"）
+// rank_crowned / rank_change 额外加 highlight 整行深色高亮
+const EVENT_BADGE = {
+  rank_crowned:       { label: "登顶",   cls: "ev-crown" },
+  rank_change:        { label: "位次",   cls: "ev-rank"  },
+  new_model_on_board: { label: "上榜",   cls: "ev-board" },
+  new_release:        { label: "发布",   cls: "ev-release" },
+  new_repo:           { label: "仓库",   cls: "ev-repo" },
+  star_surge:         { label: "暴涨",   cls: "ev-star" },
+  new_blog_post:      { label: "博客",   cls: "ev-blog" },
+};
+const HIGHLIGHT_EVENTS = new Set(["rank_crowned", "rank_change"]);
+
+const LAST_SEEN_KEY = "modelradar_alert_last_seen_ts";
+function getLastSeenTs() {
+  try { return localStorage.getItem(LAST_SEEN_KEY) || ""; } catch { return ""; }
+}
+function setLastSeenTs(iso) {
+  try { localStorage.setItem(LAST_SEEN_KEY, iso); } catch {}
+}
+
 function renderAlertBar(alerts) {
   state.alertData = alerts;
-  const count = alerts?.pending_count || 0;
+  const recentAll = alerts?.recent || [];
   const bar = $("#alert-bar");
   const badge = $("#alert-badge");
-  $("#alert-bar-count").textContent = count;
-  $("#alert-count").textContent = count;
-  if (count === 0) {
+
+  // "新消息" = created_at 晚于上次访问时间戳的条数；首次访问 lastSeen 为空则全部算新
+  const lastSeen = getLastSeenTs();
+  const isNew = (e) => !lastSeen || (e.created_at && e.created_at > lastSeen);
+  const newCount = recentAll.filter(isNew).length;
+  $("#alert-bar-count").textContent = newCount;
+  $("#alert-count").textContent = newCount;
+
+  if (recentAll.length === 0) {
     bar.hidden = true;
     badge.hidden = true;
     return;
   }
   bar.hidden = false;
-  badge.hidden = false;
-  if (!bar.dataset.userToggled) bar.open = true;
+  badge.hidden = newCount === 0;
+  if (newCount > 0 && !bar.dataset.userToggled) bar.open = true;
 
-  const recent = (alerts.recent || []).filter(alertMatchesFilter);
+  const recent = recentAll.filter(alertMatchesFilter);
   const f = state.alertFilter;
   const filterRow = `
     <div class="alert-filter-row">
@@ -182,13 +213,16 @@ function renderAlertBar(alerts) {
         const linkHtml = link ? ` <a href="${esc(link)}" target="_blank" rel="noopener">🔗</a>` : "";
         const modChip = `<span class="tag-chip tag-mod-${modality}">${modality === 'multimodal' ? '多模态' : '文本'}</span>`;
         const openChip = openness ? `<span class="tag-chip tag-open-${openness}">${openness === 'open' ? '开源' : '闭源'}</span>` : "";
+        const b = EVENT_BADGE[e.event_type] || { label: e.event_type, cls: "ev-default" };
+        const evChip = `<span class="ev-chip ${b.cls}">${esc(b.label)}</span>`;
+        const highlight = HIGHLIGHT_EVENTS.has(e.event_type) ? " highlight" : "";
         return `
-          <div class="alert-item" data-id="${e.id}">
-            <span class="sev ${esc(e.severity)}">${esc(e.severity)}</span>
+          <div class="alert-item${highlight}" data-id="${e.id}">
+            ${evChip}
             <div>
-              <div>${esc(e.title)}${linkHtml}</div>
+              <div class="alert-title">${esc(e.title)}${linkHtml}</div>
               <div class="alert-tags">${modChip}${openChip}</div>
-              <div class="meta-line">${esc(e.event_type)} · ${esc(e.source)} · ${relTime(e.created_at)}</div>
+              <div class="meta-line">${esc(e.source)} · ${relTime(e.created_at)}</div>
             </div>
           </div>`;
       }).join("");
@@ -202,6 +236,20 @@ function renderAlertBar(alerts) {
       renderAlertBar(state.alertData);
     });
   });
+
+  // 渲染 3 秒后把 lastSeen 标记到"当前最新事件时间戳"，下一次渲染这些就不再算新消息。
+  // 3s 是让用户有足够时间看到红点，再"自动已读"—— 不用点击。
+  if (newCount > 0) {
+    const latest = recentAll
+      .map((e) => e.created_at)
+      .filter(Boolean)
+      .sort()
+      .pop();
+    if (latest) {
+      clearTimeout(renderAlertBar._markTimer);
+      renderAlertBar._markTimer = setTimeout(() => setLastSeenTs(latest), 3000);
+    }
+  }
 }
 
 // ── Panel 1 · 发布 ──

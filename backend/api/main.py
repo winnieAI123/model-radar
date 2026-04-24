@@ -66,7 +66,23 @@ def _run_blog():   blog_collector.collect()
 def _run_openrouter(): openrouter_collector.collect()
 def _run_wechat(): wechat_collector.collect()
 def _run_mini_digest(): mini_digest.run_all()
-def _run_weekly(): weekly_report.generate_and_send(days=7, dry_run=False)
+def _run_weekly():
+    # 发周报前必须刷一次"发布消息"类数据源（github release / 厂商博客 / 公众号），
+    # 再跑一次 diff，让新抓到的 release/blog 转成 change_events 进入周报 § I/II。
+    # 不前置 leaderboard/reddit/heat/mini_digest —— 前者 6min 间隔已够新，后三者 LLM 调用
+    # 过慢会把周报生成拖到 5-10 分钟以上。实测单次刷新约 1-2 分钟。
+    # （2026-04-24 问题：19:00 周报没写 DeepSeek V4 发布 → 原因：_run_weekly 不刷数据）
+    for name, fn in [("github", _run_github), ("blog_rss", _run_blog),
+                     ("wechat_rss", _run_wechat)]:
+        try:
+            fn()
+        except Exception:
+            logger.exception("[WeeklyPrefetch] %s 失败，继续发周报", name)
+    try:
+        _run_diff()
+    except Exception:
+        logger.exception("[WeeklyPrefetch] diff 失败，继续发周报")
+    weekly_report.generate_and_send(days=7, dry_run=False)
 
 
 def _cold_start():
