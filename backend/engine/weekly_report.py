@@ -60,6 +60,8 @@ def _gather_events(period_start_iso: str, limit: int = 20) -> list[dict]:
             SELECT id, event_type, severity, source, title, detail_json, model_name, created_at
             FROM change_events
             WHERE created_at >= ? AND severity IN ('P0','P1')
+              AND (alert_status IS NULL
+                   OR alert_status NOT IN ('bootstrap_skipped','bootstrap_cleared','manual_skipped_noise'))
             ORDER BY
                 CASE severity WHEN 'P0' THEN 0 ELSE 1 END,
                 created_at DESC

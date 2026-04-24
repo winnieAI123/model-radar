@@ -1,6 +1,7 @@
 """榜单采集适配层：调 scrapers → 写 SQLite leaderboard_snapshots。"""
 import json
 import logging
+from datetime import datetime, timezone
 
 from backend.db import get_conn, record_status
 from backend.collectors import leaderboard_scrapers as scrapers
@@ -31,6 +32,11 @@ def _extract_score(row: dict) -> float | None:
 def _persist(source: str, category: str, rows: list[dict]) -> int:
     if not rows:
         return 0
+    # 用**同一个** scraped_at 覆盖整批写入。
+    # 过去默认的 CURRENT_TIMESTAMP 会对每行重新取系统秒 —— 当 ~300 行跨秒边界
+    # 时，同一批 scrape 会被拆成两个 DISTINCT scraped_at；diff_engine 把后半截
+    # 当成独立"上次快照"，导致 Top 10 全部被误判为首次上榜。
+    scraped_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     with get_conn() as conn:
         for row in rows:
             model = row.get("model") or row.get("model_name") or ""
@@ -44,11 +50,11 @@ def _persist(source: str, category: str, rows: list[dict]) -> int:
             score = _extract_score(row)
             conn.execute(
                 """
-                INSERT INTO leaderboard_snapshots(source, category, model_name, rank, score, extra_json)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO leaderboard_snapshots(source, category, model_name, rank, score, extra_json, scraped_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (source, category, str(model), rank_int, score,
-                 json.dumps(row, ensure_ascii=False, default=str)),
+                 json.dumps(row, ensure_ascii=False, default=str), scraped_at),
             )
     return len(rows)
 

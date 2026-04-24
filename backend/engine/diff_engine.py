@@ -23,29 +23,58 @@ STAR_SURGE_THRESHOLD = 1000
 
 
 def _latest_two_snapshots(conn, source: str, category: str) -> tuple[list | None, list | None]:
-    """返回 (最新快照, 上一次快照)，每个是 [{model, rank, score}] 按 rank 升序。"""
-    times = conn.execute(
+    """返回 (最新快照, 上一次快照)，每个是 [{model, rank, score}] 按 rank 升序。
+
+    **关键防御**：把 60 秒内的多个 `scraped_at` 合并成同一个 snapshot bucket。
+    旧版 collector 用 CURRENT_TIMESTAMP 默认值，跨秒写入会拆成多个 scraped_at；
+    一旦后半截（比如只含 rank 233-347）被取作 prev，Top 10 全员会被误判为首次上榜。
+    （2026-04-24 lmarena text 10 条 P0 误报即此路径触发。）
+    """
+    recent = conn.execute(
         """
         SELECT DISTINCT scraped_at FROM leaderboard_snapshots
         WHERE source=? AND category=?
-        ORDER BY scraped_at DESC LIMIT 2
+        ORDER BY scraped_at DESC LIMIT 50
         """,
         (source, category),
     ).fetchall()
-    if len(times) < 1:
+    if not recent:
         return None, None
-    latest = [dict(r) for r in conn.execute(
-        "SELECT model_name, rank, score FROM leaderboard_snapshots "
-        "WHERE source=? AND category=? AND scraped_at=? ORDER BY rank ASC",
-        (source, category, times[0]["scraped_at"]),
-    ).fetchall()]
-    prev = None
-    if len(times) >= 2:
-        prev = [dict(r) for r in conn.execute(
-            "SELECT model_name, rank, score FROM leaderboard_snapshots "
-            "WHERE source=? AND category=? AND scraped_at=? ORDER BY rank ASC",
-            (source, category, times[1]["scraped_at"]),
+
+    # 贪心合并：相邻 timestamp 间隔 <= 60s 视为同一批 scrape。
+    buckets: list[list[str]] = []
+    cur: list[str] = []
+    last_t: datetime | None = None
+    for r in recent:
+        t_str = r["scraped_at"]
+        try:
+            t = datetime.fromisoformat(t_str)
+        except Exception:
+            continue
+        if last_t is None or abs((last_t - t).total_seconds()) <= 60:
+            cur.append(t_str)
+        else:
+            buckets.append(cur)
+            cur = [t_str]
+            if len(buckets) >= 2:
+                break
+        last_t = t
+    if cur and len(buckets) < 2:
+        buckets.append(cur)
+    if not buckets:
+        return None, None
+
+    def _load(bucket_times: list[str]) -> list[dict]:
+        placeholders = ",".join("?" for _ in bucket_times)
+        return [dict(r) for r in conn.execute(
+            f"SELECT model_name, rank, score FROM leaderboard_snapshots "
+            f"WHERE source=? AND category=? AND scraped_at IN ({placeholders}) "
+            f"ORDER BY rank ASC",
+            (source, category, *bucket_times),
         ).fetchall()]
+
+    latest = _load(buckets[0])
+    prev = _load(buckets[1]) if len(buckets) >= 2 else None
     return latest, prev
 
 
