@@ -117,9 +117,9 @@ def main():
     scheduler.add_job(_safe(run_reddit, "reddit"),
                       IntervalTrigger(minutes=config.INTERVAL_REDDIT_MIN),
                       id="reddit", max_instances=1, coalesce=True)
-    # 周一 09:00 Asia/Shanghai 发周报
+    # 周五 19:00 Asia/Shanghai 发周报
     scheduler.add_job(_safe(run_weekly_report, "weekly_report"),
-                      CronTrigger(day_of_week="mon", hour=9, minute=0,
+                      CronTrigger(day_of_week="fri", hour=19, minute=0,
                                   timezone="Asia/Shanghai"),
                       id="weekly_report", max_instances=1, coalesce=True)
 
@@ -132,7 +132,7 @@ def main():
     signal.signal(signal.SIGINT, _shutdown)
 
     logger.info(
-        "调度器启动，间隔: leaderboard=%dmin github=%dmin diff=%dmin p0=%dmin reddit=%dmin 周报=周一 09:00",
+        "调度器启动，间隔: leaderboard=%dmin github=%dmin diff=%dmin p0=%dmin reddit=%dmin 周报=周五 19:00",
         config.INTERVAL_LEADERBOARD_MIN, config.INTERVAL_GITHUB_MIN,
         config.INTERVAL_DIFF_MIN, config.INTERVAL_P0_ALERT_MIN,
         config.INTERVAL_REDDIT_MIN,

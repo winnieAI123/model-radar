@@ -547,7 +547,7 @@ async function loadWeeklyReports() {
   const rows = await jfetch("/api/weekly-reports?limit=12");
   const holder = $("#weekly-reports");
   if (!rows.length) {
-    holder.innerHTML = `<div style="padding:24px;color:var(--muted);text-align:center;">还没有周报（下周一 09:00 自动生成）</div>`;
+    holder.innerHTML = `<div style="padding:24px;color:var(--muted);text-align:center;">还没有周报（下周五 19:00 自动生成）</div>`;
     return;
   }
   holder.innerHTML = rows.map((r) => {

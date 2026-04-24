@@ -115,6 +115,7 @@ def _build_prompt(posts: list[dict]) -> list[dict]:
         f'  "categories": [\n'
         f'    {{\n'
         f'      "name":    "分类名（中文，6-12 字）",\n'
+        f'      "hint":    "15-40 字，以 · 分隔的**具体实体/数字/博主名**列表，供周报开头速览（例：「GPT-5.5 API 定价 $5/$30·Claude 4.7 编码 82.7%·赛博禅心实测」）。**不允许**泛词如「深入分析」「行业观察」；必须能让读者只看这一行就知道这类聊了谁的什么。",\n'
         f'      "summary": "150-350 字综合段落，含具体数字/对比/博主名，[1][2] 引用",\n'
         f'      "refs":    [1, 2, 3]   // 该段落引用到的文章编号（去重后的有序数组）\n'
         f'    }}\n'
@@ -224,6 +225,7 @@ def generate(days: int = 7, top_posts: int = 150) -> dict:
         if not isinstance(c, dict):
             continue
         name    = (c.get("name")    or "").strip()
+        hint    = (c.get("hint")    or "").strip()
         summary = (c.get("summary") or "").strip()
         refs_in = c.get("refs") or []
         if not name or not summary:
@@ -231,7 +233,7 @@ def generate(days: int = 7, top_posts: int = 150) -> dict:
         cleaned, refs = _resolve_refs(summary, refs_in, posts)
         if not refs:  # 段落里一个有效引用都没有，跳过
             continue
-        categories.append({"name": name, "summary": cleaned, "refs": refs})
+        categories.append({"name": name, "hint": hint, "summary": cleaned, "refs": refs})
 
     logger.info("[WeChatDigest] %d 类 / %d 篇文章", len(categories), len(posts))
     return {

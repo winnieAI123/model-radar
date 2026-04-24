@@ -1,4 +1,4 @@
-"""Weekly Report：每周一 9:00 生成并邮件推送。
+"""Weekly Report：每周五 19:00 生成并邮件推送。
 
 v4 结构（2026-04-22 第三轮调整：加 HF 板块 + 重新排序）：
 1. 头部：周数 + 本周事件/Release/榜单快照 统计
@@ -218,18 +218,20 @@ def _render_html(data: dict) -> str:
                 return s.split(sep)[0]
         return s
 
-    # 开头概览：覆盖 II-VIII 每一节的核心内容，让读者只读开头就能掌握本周全貌。
-    # 每节 1-2 个短分句，用「；」连接成一段。目标长度 350-500 字。
-    # 2026-04-24 用户反馈：开头太薄，尤其 WeChat 部分要交代每类讲了什么。
-    parts = []
+    # 开头概览：每个板块独立一行（bullet list），以 <strong> 标签领起。
+    # 2026-04-24：上一版用 ；-join 成单段，跨板块内容容易被拉长到 > 400 字，
+    #   WeChat 部分的 sm[:120] 截断又常在无标点处断开（典型："每处改动以 Wor"）。
+    #   改成每行一个板块后，板块内部用 sm[:N] 截断即使断在中间也读者一眼能看到"哦这行截了"，
+    #   而且可以视觉上列表化扫读，不再需要拼成连贯段落。
+    rows: list[tuple[str, str]] = []  # (label, body)
 
     # § II · Releases
     rel_items = data["releases"].get("items") or []
     if rel_items:
         names = "、".join(f"{r['org']}/{r['repo_name']}" for r in rel_items[:3])
-        parts.append(f"新模型发布 {len(rel_items)} 款（{names}）")
+        rows.append(("发布", f"新模型 {len(rel_items)} 款 — {names}"))
 
-    # § III · Leaderboards（取首个领域 summary 首句 + 跨榜单家族占比）
+    # § III · Leaderboards
     lb_first_sum = next((v.get("summary_md") for v in data["leaderboards"].values() if v.get("summary_md")), None)
     all_fams: dict[str, int] = {}
     for _domain in (data["leaderboards"] or {}).values():
@@ -244,21 +246,21 @@ def _render_html(data: dict) -> str:
         if top_fam_count >= 5:
             lb_bits.append(f"{top_fam_name} 系列跨榜单占 {top_fam_count} 席")
     if lb_bits:
-        parts.append(f"榜单方面，{'，'.join(lb_bits)}")
+        rows.append(("榜单", "，".join(lb_bits)))
 
-    # 黑马登顶事件 — 独立一句
+    # 黑马登顶事件
     crowned = [e for e in data["events"] if e.get("event_type") == "rank_crowned"]
     if crowned:
         first_title = (crowned[0].get("title") or "").strip()
         if first_title:
-            parts.append(f"黑马登顶：{first_title[:40]}" + ("…" if len(first_title) > 40 else ""))
+            rows.append(("黑马登顶", first_title[:60] + ("…" if len(first_title) > 60 else "")))
 
-    # § IV · HuggingFace 趋势
+    # § IV · HuggingFace
     hf_sum = data["hf"].get("summary_md")
     if hf_sum:
-        parts.append(f"HuggingFace 上 {_first_clause(hf_sum)}")
+        rows.append(("HuggingFace", _first_clause(hf_sum)))
 
-    # § V · OpenRouter 调用量（尽量带上 Top3 + 暴涨/下滑关键点）
+    # § V · OpenRouter
     or_sum = data["openrouter"].get("summary_md")
     if or_sum:
         or_brief = _first_clause(or_sum)
@@ -268,23 +270,23 @@ def _render_html(data: dict) -> str:
                 nxt = _first_clause(rest[1])
                 if nxt and len(or_brief) + len(nxt) < 140:
                     or_brief = or_brief + "。" + nxt
-        parts.append(or_brief[:140])
+        rows.append(("OpenRouter", or_brief[:140]))
 
-    # § VI · 社区声音（Reddit 讨论集中在哪些模型）
+    # § VI · 社区声音
     op_models = data["opinions"].get("models") or []
     if op_models:
         top_names = "、".join(m.get("model") or "" for m in op_models[:3])
-        parts.append(f"Reddit 讨论集中在 {top_names}")
+        rows.append(("Reddit", f"讨论集中在 {top_names}"))
 
-    # § VII · 本周热议（取 Top 2-3 主题标题）
+    # § VII · 热议主题
     theme_items = data["themes"].get("themes") or []
     if theme_items:
         theme_titles = "、".join((t.get("title") or "")[:20] for t in theme_items[:3] if t.get("title"))
         if theme_titles:
-            parts.append(f"热议主题 {theme_titles}")
+            rows.append(("热议", theme_titles))
 
-    # § VIII · 中文社区观察 — 每类给 name + 关键实体/主题（从 summary 抠首句）
-    # 用户要求：看开头就能知道博主聊了什么，而不只是"产出 N 篇"
+    # § VIII · 中文社区观察 — 优先用 LLM 产出的 hint（15-40 字具体实体列表），
+    #   没有 hint 时 fallback 到 summary 句首截断（并在自然标点处切断，而不是硬截 120 字）。
     w_count = (data.get("wechat") or {}).get("article_count", 0) or 0
     w_cats = (data.get("wechat") or {}).get("categories") or []
     if w_count >= 3 and w_cats:
@@ -292,31 +294,38 @@ def _render_html(data: dict) -> str:
         cat_briefs = []
         for c in w_cats[:3]:
             name = (c.get("name") or "").strip()
-            sm = _re_local.sub(r"\[\d+\]", "", c.get("summary") or "").strip()
-            # 开头提示取 ~120 字，在最近的自然停顿截断（让老板只看开头就能看到具体数字/对比/博主名）
-            hint = sm[:120]
-            for sep in ("。", "；"):
-                idx = hint.rfind(sep)
-                if idx >= 50:
-                    hint = hint[:idx]
-                    break
-            hint = hint.strip("，。； ")
-            if name and hint:
-                cat_briefs.append(f"{name}（{hint}）")
+            h = (c.get("hint") or "").strip()
+            if not h:
+                sm = _re_local.sub(r"\[\d+\]", "", c.get("summary") or "").strip()
+                h = sm[:80]
+                for sep in ("。", "；", "，"):
+                    idx = h.rfind(sep)
+                    if idx >= 30:
+                        h = h[:idx]
+                        break
+                h = h.strip("，。； ")
+            if name and h:
+                cat_briefs.append(f"{name}（{h}）")
             elif name:
                 cat_briefs.append(name)
         if cat_briefs:
-            parts.append(f"中文博主 {w_count} 篇文章围绕 {'、'.join(cat_briefs)}")
+            rows.append(("中文博主", f"{w_count} 篇文章 — " + "；".join(cat_briefs)))
         else:
-            parts.append(f"中文博主产出 {w_count} 篇相关测评")
+            rows.append(("中文博主", f"产出 {w_count} 篇相关测评"))
 
     digest_html = ""
-    if parts:
-        sentence = "；".join(parts) + "。"
+    if rows:
+        bullet_items = "".join(
+            f"""<li style="font-family:{SERIF};font-size:15px;color:{FG};line-height:1.85;margin:0 0 8px 0;">
+              <strong style="font-family:{SANS};font-size:11px;color:{ACCENT};letter-spacing:0.1em;text-transform:uppercase;display:inline-block;min-width:96px;">{_esc(lbl)}</strong>
+              <span>{_esc(body)}</span>
+            </li>"""
+            for lbl, body in rows
+        )
         digest_html = f"""
-        <p style="font-family:{SERIF};font-size:16px;color:{FG};line-height:1.95;margin:0 0 28px 0;">
-          {_esc(sentence)}
-        </p>
+        <ul style="list-style:none;padding:0;margin:0 0 32px 0;border-left:2px solid {RULE};padding-left:18px;">
+          {bullet_items}
+        </ul>
         """
 
     ev_rows = []
@@ -829,7 +838,7 @@ def generate_and_send(days: int = 7, dry_run: bool = False) -> dict:
             record_status("weekly_report", success=True)
             return result
 
-        subject = f"ModelRadar 周报 · {data['week_number']} · {data['stats']['total_events']} 条事件"
+        subject = f"ThisWeekInModels 周报 {data['week_number']}"
         ok = send_email(subject, html)
         if ok:
             _mark_sent(data["week_number"])

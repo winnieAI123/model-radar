@@ -159,7 +159,7 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     logger.info(
         "调度器启动 · leaderboard=%dmin github=%dmin diff=%dmin p0=%dmin heat=%dmin "
-        "reddit=%dmin hf=%dmin blog=%dmin openrouter=%dmin wechat=%dmin mini_digest=%dmin 周报=周一09:00",
+        "reddit=%dmin hf=%dmin blog=%dmin openrouter=%dmin wechat=%dmin mini_digest=%dmin 周报=周五19:00",
         config.INTERVAL_LEADERBOARD_MIN, config.INTERVAL_GITHUB_MIN,
         config.INTERVAL_DIFF_MIN, config.INTERVAL_P0_ALERT_MIN,
         config.INTERVAL_HEAT_MIN, config.INTERVAL_REDDIT_MIN,
