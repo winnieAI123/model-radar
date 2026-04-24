@@ -2,9 +2,10 @@
 import os
 from pathlib import Path
 
+_ROOT = Path(__file__).resolve().parents[2]
+
 try:
     from dotenv import load_dotenv
-    _ROOT = Path(__file__).resolve().parents[2]
     load_dotenv(_ROOT / ".env")
 except ImportError:
     pass
