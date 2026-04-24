@@ -293,7 +293,7 @@ a.name:hover {
 
 /* Leaderboard & list rows */
 .lb-row, .list-row {
-  display: grid; grid-template-columns: 28px 1fr 62px 54px;
+  display: grid; grid-template-columns: 28px 1fr 96px 54px;
   align-items: center; gap: 10px;
   padding: 9px 18px; border-bottom: 1px dotted var(--rule);
   font-family: var(--serif); font-size: 14px; color: var(--text);
@@ -305,20 +305,27 @@ a.name:hover {
 }
 .lb-row .name, .list-row .name {
   overflow: hidden; min-width: 0;
-  display: flex; flex-direction: column; gap: 2px;
-}
-.lb-row .name-main {
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.lb-row .lb-meta {
-  font-family: var(--sans); font-size: 10px; color: var(--faint);
-  letter-spacing: 0.02em; white-space: nowrap;
-  overflow: hidden; text-overflow: ellipsis;
+  text-overflow: ellipsis; white-space: nowrap;
 }
 .lb-row .score, .list-row .score {
   text-align: right; color: var(--faint);
   font-family: var(--sans); font-size: 11px;
   font-variant-numeric: tabular-nums;
+}
+/* 列头行：复用 .lb-row 栅格，加底色和小字区别于数据行 */
+.lb-row.lb-header {
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--rule);
+  padding: 6px 18px;
+  font-family: var(--sans); font-size: 10px;
+  color: var(--faint); letter-spacing: 0.06em;
+}
+.lb-row.lb-header .rank,
+.lb-row.lb-header .name,
+.lb-row.lb-header .score,
+.lb-row.lb-header .delta {
+  color: var(--faint); font-style: normal; font-size: 10px;
+  text-transform: uppercase;
 }
 .lb-row .delta, .list-row .delta {
   text-align: right;

@@ -359,16 +359,18 @@ def _gather_source_items(conn, source: str, category: str, limit: int = 10) -> d
         else:
             delta = prev - r["rank"]  # 正=上升，负=下降
         # lmarena LLM 类目 extra_json 里带 price_per_1m_tokens / context_length，按原样透传给前端
+        # 另外 lmarena 把 "1504±9" 这种分数存在 extra.score 里（主 score 列是 None），做 fallback
         extra = {}
         if r["extra_json"]:
             try:
                 extra = json.loads(r["extra_json"]) or {}
             except Exception:
                 extra = {}
+        score = r["score"] if r["score"] is not None else extra.get("score")
         items.append({
             "rank": r["rank"],
             "model_name": name,
-            "score": r["score"],
+            "score": score,
             "prev_rank": prev,
             "delta": delta,
             "price_per_1m_tokens": extra.get("price_per_1m_tokens"),

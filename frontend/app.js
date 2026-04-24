@@ -281,24 +281,33 @@ function renderLbPanel(d) {
   if (!src.items?.length) {
     holder.innerHTML = chipsHtml + `<div class="empty">该平台暂无数据</div>`;
   } else {
+    // 仅 lmarena + LLM 榜单在第三列展示价格（OR 官方 extra_json.price_per_1m_tokens，形如 "$5/$25"）
+    const showPrice = src.source === "lmarena" && state.lbTab === "llm";
+    const col3Label = showPrice ? "输入/输出 1M tokens" : "评分";
+    const headerHtml = `
+      <div class="lb-row lb-header">
+        <span class="rank">#</span>
+        <span class="name">模型</span>
+        <span class="score">${col3Label}</span>
+        <span class="delta">Δ</span>
+      </div>`;
     const rows = src.items.map((r) => {
-      // lmarena LLM 榜单 extra 带价格（"$5/$25" = input/output per 1M tokens）和上下文（"1M"），按原始字串展示
-      const meta = [];
-      if (r.price_per_1m_tokens) meta.push(`💰 ${esc(r.price_per_1m_tokens)}/1M`);
-      if (r.context_length) meta.push(`📏 ${esc(r.context_length)}`);
-      const metaHtml = meta.length ? `<span class="lb-meta">${meta.join(" · ")}</span>` : "";
+      // lmarena 的 score 形如 "1504±9"（字符串），aa/superclue 是数字；都透传为字串展示
+      const scoreRaw = r.score;
+      const scoreText = scoreRaw == null ? "—"
+        : (typeof scoreRaw === "number" ? scoreRaw.toFixed(0) : String(scoreRaw));
+      const col3 = showPrice
+        ? (r.price_per_1m_tokens ? esc(r.price_per_1m_tokens) : "—")
+        : esc(scoreText);
       return `
       <div class="lb-row">
         <span class="rank">#${r.rank}</span>
-        <span class="name" title="${esc(r.model_name)}">
-          <span class="name-main">${esc(r.model_name)}</span>
-          ${metaHtml}
-        </span>
-        <span class="score">${r.score != null ? Number(r.score).toFixed(0) : "—"}</span>
+        <span class="name" title="${esc(r.model_name)}">${esc(r.model_name)}</span>
+        <span class="score">${col3}</span>
         ${deltaSpan(r.delta)}
       </div>`;
     }).join("");
-    holder.innerHTML = chipsHtml + rows;
+    holder.innerHTML = chipsHtml + headerHtml + rows;
   }
 
   holder.querySelectorAll(".chip-label[data-src-idx]").forEach((btn) => {
