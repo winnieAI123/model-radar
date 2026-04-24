@@ -25,7 +25,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from backend.db import get_conn
-from backend.utils.model_alias import find_mentions, register_learned_alias
+from backend.utils.model_alias import find_mentions, register_learned_alias, ALIAS_TABLE
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +92,23 @@ def _is_noise(raw: str) -> bool:
     return False
 
 
+# 小版本折叠：如果候选是已有 canonical 的"主版本.次版本"变体（如 Qwen3.6 → Qwen3 已存在），
+# 不铸成新 canonical，避免同家族讨论被拆散。匹配规则：去掉 .小版本 后的字符串是已知 canonical。
+_VERSION_SUFFIX_RE = re.compile(r"^([A-Za-z]+[0-9]+)\.[0-9]+[A-Za-z]*$")
+
+def _is_subversion_of_known(raw: str) -> bool:
+    """Qwen3.6 → 检查 Qwen3 是否已是 canonical；是则视为噪声（让主版本吸收讨论）。"""
+    m = _VERSION_SUFFIX_RE.match(raw.strip())
+    if not m:
+        return False
+    trunk = m.group(1)  # "Qwen3"
+    # ALIAS_TABLE key 是 canonical 原样；也检查大小写变体
+    for canonical in ALIAS_TABLE.keys():
+        if canonical.lower() == trunk.lower():
+            return True
+    return False
+
+
 def _is_slash_noise(raw: str) -> bool:
     """slash 形态的额外噪声判断。"""
     if "/" not in raw:
@@ -132,12 +149,14 @@ def _extract(text: str) -> tuple[list[str], list[str]]:
 
     for m in _PAT_WORD_VER.finditer(text):
         raw = m.group(1).strip()
-        if not _is_noise(raw):
-            _put(high, raw)
+        if _is_noise(raw) or _is_subversion_of_known(raw):
+            continue
+        _put(high, raw)
     for m in _PAT_BRAND_NUM.finditer(text):
         raw = m.group(1).strip()
-        if not _is_noise(raw):
-            _put(high, raw)
+        if _is_noise(raw) or _is_subversion_of_known(raw):
+            continue
+        _put(high, raw)
     for m in _PAT_SLASH.finditer(text):
         raw = m.group(1).strip()
         if _is_noise(raw) or _is_slash_noise(raw):

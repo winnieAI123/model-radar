@@ -64,8 +64,12 @@ ALIAS_TABLE: dict[str, list[str]] = {
     "DeepSeek-R1":          ["deepseek-r1", "deepseek-r1-distill", "deepseek/deepseek-r1",
                              "deepseek r1", "ds-r1"],
     "DeepSeek-V4":          ["deepseek-v4", "deepseek v4", "ds-v4"],  # 预期会出，提前占位
-    # Qwen
-    "Qwen3":                ["qwen3", "qwen-3", "qwenlm/qwen3", "qwen3-235b", "qwen3-max", "qwen 3"],
+    # Qwen —— Qwen3.x 小版本全部折叠到 Qwen3；qwen-code 是官方编码 agent 工具，讨论等同 Qwen3 家族
+    "Qwen3":                ["qwen3", "qwen-3", "qwenlm/qwen3", "qwen3-235b", "qwen3-max", "qwen 3",
+                             "qwen3.1", "qwen3.2", "qwen3.3", "qwen3.4", "qwen3.5", "qwen3.6", "qwen3.7",
+                             "qwen 3.1", "qwen 3.2", "qwen 3.3", "qwen 3.4", "qwen 3.5", "qwen 3.6", "qwen 3.7",
+                             "qwen-3.1", "qwen-3.2", "qwen-3.3", "qwen-3.4", "qwen-3.5", "qwen-3.6", "qwen-3.7",
+                             "qwen-code", "qwen code", "qwencode"],
     "Qwen3-Coder":          ["qwen3-coder", "qwen3 coder", "qwen-3-coder"],
     "Qwen3-VL":             ["qwen3-vl", "qwen3 vl", "qwen-3-vl"],
     "Qwen2.5-72B":          ["qwen2.5-72b-instruct", "qwen2.5-72b", "qwen-2.5-72b", "qwen2.5 72b"],
