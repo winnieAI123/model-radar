@@ -59,7 +59,7 @@ function setUpdated(sel, iso) {
 
 // ── Alerts 顶部横条 ──
 
-// 开/闭源 org 分类。只对高置信目标打 tag；未知的不打 tag（避免误导）。
+// 开/闭源 org 分类（兜底层）。榜单事件的 detail 里没有 org，必须靠 OPENNESS_PATTERNS 兜底。
 const CLOSED_ORGS = new Set([
   "openai", "anthropic", "google", "google-deepmind", "deepmind",
   "xai", "midjourney", "ideogram", "runway", "pika", "cohere",
@@ -76,8 +76,45 @@ const OPEN_BLOG_SOURCES = new Set([
   "blog_deepseek", "blog_moonshot", "blog_qwen", "blog_meta",
 ]);
 
-// 多模态关键词：命中即 multimodal，否则 text
+// 模型名级开/闭源判定。按数组顺序匹配，先命中先赢。
+// FLUX / Mistral 这类一家公司同时有开闭源的，用子款式 (dev/schnell vs pro/max) 细分。
+const OPENNESS_PATTERNS = [
+  // FLUX 细分：dev/schnell/klein 开源；pro/max/ultra/kontext-pro 闭源
+  // [\s.\-\d]* 允许 flux 和子款式之间混合数字 / 点 / 空格 / 连字符（如 FLUX.1-dev / FLUX 1.1 Pro）
+  { re: /\bflux[\s.\-\d]*(?:dev|schnell|klein)\b/i, v: "open" },
+  { re: /\bflux[\s.\-\d]*(?:pro|max|ultra|kontext[\s.\-]*pro)\b/i, v: "closed" },
+  // Qwen3-Max 闭源（其它 Qwen 开源，放下面）
+  { re: /\bqwen3?[\s.\-]*max\b/i, v: "closed" },
+  // Mistral Large 闭源（其它 Mistral/Mixtral 开源）
+  { re: /\bmistral[\s.\-]*large\b/i, v: "closed" },
+
+  // 开源模型
+  { re: /\b(?:deepseek|kimi[\s.\-]*k?\d+|glm[\s.\-]*\d|qwen[\s\-.]?(?:\d|image|coder|audio|math|vl|qwq)|qwq|yi[\s.\-]*\d|llama[\s.\-]*\d?|mistral|mixtral|hunyuan|wan[\s.\-]*[0-9v]|cogvideox|open[\s.\-]?sora|ltx[\s.\-]?video|mochi|skyreels|bagel|hidream|stable[\s.\-]?diffusion|sdxl|sd[\s.\-]?\d|step[\s.\-]*\d|minimax[\s.\-]?m\d|internlm|baichuan|phi[\s.\-]*\d)/i, v: "open" },
+
+  // 闭源模型
+  { re: /\b(?:gpt[\s.\-]?[345]|gpt[\s.\-]?4[\w\-]*|chatgpt|o[1-4][\s.\-]?(?:mini|preview|pro)?|claude|gemini|nano[\s.\-]?banana|grok|nova[\s.\-]?(?:pro|lite|micro)?|titan|command[\s.\-]?[ra]?|doubao|ernie|文心|sora|veo[\s.\-]?\d?|kling|runway|pika|hailuo|pixverse|vidu|luma|ray[\s.\-]?\d|seedance|seedream|dreamina|marey|haiper|midjourney|ideogram|dall[\s.\-]?e|imagen|firefly|recraft|happy[\s.\-]?horse)|可灵|海螺|即梦/i, v: "closed" },
+];
+
+function opennessByName(text) {
+  if (!text) return null;
+  for (const { re, v } of OPENNESS_PATTERNS) {
+    if (re.test(text)) return v;
+  }
+  return null;
+}
+
+// 多模态兜底关键词（用在模型名里，没 category 时用）
 const MULTIMODAL_RE = /\b(image|video|audio|vision|multi[-\s]?modal|sora|veo[-\s]?\d|kling|flux|midjourney|ideogram|imagen|pika|runway|nano[-\s]?banana|dall[-\s]?e|hunyuan[-\s]?video|wan[-\s]?\d|seedream|seedance|gen[-\s]?[3-9])|混元视频|可灵|即梦/i;
+
+// 榜单/新模型事件 detail.category 直接权威：text/llm = 文本；其它 (text_to_image, text_to_video,
+// image_to_video, text_to_speech, image_edit …) = 多模态。这比靠模型名正则猜可靠得多，
+// 不会再出现「SkyReels V4」被判成文本的事。
+function modalityByCategory(detail) {
+  const cat = (detail?.category || "").toLowerCase();
+  if (!cat) return null;
+  if (cat === "text" || cat === "llm" || cat === "text_to_text") return "text";
+  return "multimodal";
+}
 
 function classifyAlert(e) {
   const src = (e.source || "").toLowerCase();
@@ -85,11 +122,15 @@ function classifyAlert(e) {
   const org = (detail.org || detail.owner || "").toLowerCase();
   const text = `${e.model_name || ""} ${e.title || ""} ${detail.repo_name || ""}`;
 
-  let openness = null;
-  if (CLOSED_BLOG_SOURCES.has(src) || CLOSED_ORGS.has(org)) openness = "closed";
-  else if (OPEN_BLOG_SOURCES.has(src) || OPEN_ORGS.has(org) || src === "hf" || src === "github") openness = "open";
+  // openness: 先看模型名（榜单事件没 org，只能靠这个）；兜底 org / blog 源。
+  let openness = opennessByName(text);
+  if (!openness) {
+    if (CLOSED_BLOG_SOURCES.has(src) || CLOSED_ORGS.has(org)) openness = "closed";
+    else if (OPEN_BLOG_SOURCES.has(src) || OPEN_ORGS.has(org) || src === "hf" || src === "github") openness = "open";
+  }
 
-  const modality = MULTIMODAL_RE.test(text) ? "multimodal" : "text";
+  // modality: detail.category 优先（榜单事件权威），没 category 时才靠模型名正则。
+  const modality = modalityByCategory(detail) ?? (MULTIMODAL_RE.test(text) ? "multimodal" : "text");
   return { modality, openness };
 }
 
