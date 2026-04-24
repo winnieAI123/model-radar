@@ -294,7 +294,7 @@ a.name:hover {
 /* Leaderboard & list rows */
 .lb-row, .list-row {
   display: grid; grid-template-columns: 28px 1fr 62px 54px;
-  align-items: baseline; gap: 10px;
+  align-items: center; gap: 10px;
   padding: 9px 18px; border-bottom: 1px dotted var(--rule);
   font-family: var(--serif); font-size: 14px; color: var(--text);
 }
@@ -304,7 +304,16 @@ a.name:hover {
   text-align: right; font-size: 12px; font-style: italic;
 }
 .lb-row .name, .list-row .name {
+  overflow: hidden; min-width: 0;
+  display: flex; flex-direction: column; gap: 2px;
+}
+.lb-row .name-main {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.lb-row .lb-meta {
+  font-family: var(--sans); font-size: 10px; color: var(--faint);
+  letter-spacing: 0.02em; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
 }
 .lb-row .score, .list-row .score {
   text-align: right; color: var(--faint);

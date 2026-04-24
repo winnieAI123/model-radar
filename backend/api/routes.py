@@ -335,7 +335,7 @@ def _gather_source_items(conn, source: str, category: str, limit: int = 10) -> d
     latest_ts = timeline[0]["scraped_at"]
     prev_ts = timeline[1]["scraped_at"] if len(timeline) > 1 else None
     latest_rows = conn.execute(
-        "SELECT rank, model_name, score FROM leaderboard_snapshots "
+        "SELECT rank, model_name, score, extra_json FROM leaderboard_snapshots "
         "WHERE source=? AND category=? AND scraped_at=? "
         "ORDER BY rank LIMIT ?",
         (source, category, latest_ts, limit),
@@ -358,12 +358,21 @@ def _gather_source_items(conn, source: str, category: str, limit: int = 10) -> d
             delta = 0
         else:
             delta = prev - r["rank"]  # 正=上升，负=下降
+        # lmarena LLM 类目 extra_json 里带 price_per_1m_tokens / context_length，按原样透传给前端
+        extra = {}
+        if r["extra_json"]:
+            try:
+                extra = json.loads(r["extra_json"]) or {}
+            except Exception:
+                extra = {}
         items.append({
             "rank": r["rank"],
             "model_name": name,
             "score": r["score"],
             "prev_rank": prev,
             "delta": delta,
+            "price_per_1m_tokens": extra.get("price_per_1m_tokens"),
+            "context_length": extra.get("context_length"),
         })
     return {"scraped_at": latest_ts, "prev_scraped_at": prev_ts, "items": items}
 
@@ -431,7 +440,8 @@ def _panel_openrouter(conn) -> dict:
         (latest,),
     ).fetchone()[0]
     rows = conn.execute(
-        "SELECT rank, model_permaslug, author, total_tokens, request_count, change_pct, matched_model "
+        "SELECT rank, model_permaslug, author, total_tokens, request_count, change_pct, "
+        "       matched_model, display_name "
         "FROM openrouter_rankings WHERE week_date=? AND scraped_at=? ORDER BY rank LIMIT 10",
         (latest, last_scrape),
     ).fetchall()

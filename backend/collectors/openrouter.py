@@ -36,6 +36,7 @@ from backend.utils.retry import retry_with_backoff
 logger = logging.getLogger(__name__)
 
 RANKINGS_URL = "https://openrouter.ai/rankings"
+MODELS_URL = "https://openrouter.ai/api/frontend/models"  # 有 permaslug + 官方 short_name
 TOP_N = 30  # 落库 Top 30，周报只挑 Top 10-15 展示
 
 # 每一行 model 数据的 JSON 结构。注意 non-greedy，允许中间字段顺序小变动。
@@ -66,6 +67,35 @@ def _fetch_html() -> str:
     )
     resp.raise_for_status()
     return resp.text
+
+
+def _fetch_display_names() -> dict[str, str]:
+    """拉 OR 官方模型目录，返回 permaslug → short_name 映射。
+    short_name 就是网站上 rankings 页面展示的那个名字（Claude Sonnet 4.6 / MiMo-V2-Pro 等），
+    所有 ~700 个模型都有，一次抓全量做本地 map。
+    异常时返回空 dict，由调用方降级到 slug。
+    """
+    try:
+        resp = requests.get(
+            MODELS_URL,
+            headers={"User-Agent": "ModelRadar/1.0", "Accept": "application/json"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        items = data.get("data") if isinstance(data, dict) else data
+        if not isinstance(items, list):
+            return {}
+        mp: dict[str, str] = {}
+        for m in items:
+            slug = m.get("permaslug")
+            name = m.get("short_name")
+            if slug and name:
+                mp[slug] = name
+        return mp
+    except Exception as e:
+        logger.warning("[OpenRouter] 拉取 /api/frontend/models 失败，display_name 将降级为 slug: %s", e)
+        return {}
 
 
 def _extract_payload(html: str) -> str:
@@ -153,7 +183,8 @@ def _match_model(slug: str) -> str | None:
     return hits[0] if hits else None
 
 
-def _persist(conn, week_date: str, ranked: list[tuple[str, dict]]) -> int:
+def _persist(conn, week_date: str, ranked: list[tuple[str, dict]],
+             display_names: dict[str, str]) -> int:
     """写 Top N 到 openrouter_rankings。同 week_date 的旧数据先清掉，避免 redeploy 累积重复快照。"""
     conn.execute("DELETE FROM openrouter_rankings WHERE week_date=?", (week_date[:10],))
     inserted = 0
@@ -161,19 +192,20 @@ def _persist(conn, week_date: str, ranked: list[tuple[str, dict]]) -> int:
         author = slug.split("/", 1)[0] if "/" in slug else None
         total = v["completion"] + v["prompt"] + v["reasoning"]
         matched = _match_model(slug)
+        display = display_names.get(slug)  # OR 官方 short_name；拿不到时留 NULL，前端降级到 slug
         cur = conn.execute(
             """
             INSERT INTO openrouter_rankings
               (week_date, rank, model_permaslug, author,
                total_tokens, completion_tokens, prompt_tokens, reasoning_tokens,
-               request_count, change_pct, matched_model)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               request_count, change_pct, matched_model, display_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 week_date[:10],  # 只存日期部分
                 rank, slug, author,
                 total, v["completion"], v["prompt"], v["reasoning"],
-                v["count"], v["change"], matched,
+                v["count"], v["change"], matched, display,
             ),
         )
         if cur.rowcount > 0:
@@ -182,7 +214,7 @@ def _persist(conn, week_date: str, ranked: list[tuple[str, dict]]) -> int:
 
 
 def collect() -> dict:
-    """抓一次 OR 周榜，写 Top 30。返回 {week_date, inserted, matched}。"""
+    """抓一次 OR 周榜，写 Top 30。返回 {week_date, inserted, matched, display_hits}。"""
     try:
         html = _fetch_html()
         payload = _extract_payload(html)
@@ -191,16 +223,20 @@ def collect() -> dict:
         if not ranked:
             raise RuntimeError(f"openrouter rankings: 解析到 0 条 weekly 数据（rows={len(rows)}）")
 
+        display_names = _fetch_display_names()
+
         with get_conn() as conn:
-            inserted = _persist(conn, week_date, ranked)
+            inserted = _persist(conn, week_date, ranked, display_names)
             matched = sum(1 for _, v in ranked[:TOP_N] if _match_model(_) is not None)
+            display_hits = sum(1 for slug, _ in ranked[:TOP_N] if slug in display_names)
 
         logger.info(
-            "[OpenRouter] 周榜 %s: Top %d 写入 %d 条 · canonical 匹配 %d",
-            week_date[:10], min(len(ranked), TOP_N), inserted, matched,
+            "[OpenRouter] 周榜 %s: Top %d 写入 %d 条 · canonical=%d · display_name=%d",
+            week_date[:10], min(len(ranked), TOP_N), inserted, matched, display_hits,
         )
         record_status("openrouter", success=True)
-        return {"week_date": week_date[:10], "inserted": inserted, "matched": matched}
+        return {"week_date": week_date[:10], "inserted": inserted,
+                "matched": matched, "display_hits": display_hits}
     except Exception as e:
         logger.exception("OpenRouter 采集失败: %s", e)
         record_status("openrouter", success=False, error=str(e))

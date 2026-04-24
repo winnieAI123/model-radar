@@ -281,13 +281,23 @@ function renderLbPanel(d) {
   if (!src.items?.length) {
     holder.innerHTML = chipsHtml + `<div class="empty">该平台暂无数据</div>`;
   } else {
-    const rows = src.items.map((r) => `
+    const rows = src.items.map((r) => {
+      // lmarena LLM 榜单 extra 带价格（"$5/$25" = input/output per 1M tokens）和上下文（"1M"），按原始字串展示
+      const meta = [];
+      if (r.price_per_1m_tokens) meta.push(`💰 ${esc(r.price_per_1m_tokens)}/1M`);
+      if (r.context_length) meta.push(`📏 ${esc(r.context_length)}`);
+      const metaHtml = meta.length ? `<span class="lb-meta">${meta.join(" · ")}</span>` : "";
+      return `
       <div class="lb-row">
         <span class="rank">#${r.rank}</span>
-        <span class="name" title="${esc(r.model_name)}">${esc(r.model_name)}</span>
+        <span class="name" title="${esc(r.model_name)}">
+          <span class="name-main">${esc(r.model_name)}</span>
+          ${metaHtml}
+        </span>
         <span class="score">${r.score != null ? Number(r.score).toFixed(0) : "—"}</span>
         ${deltaSpan(r.delta)}
-      </div>`).join("");
+      </div>`;
+    }).join("");
     holder.innerHTML = chipsHtml + rows;
   }
 
@@ -334,12 +344,16 @@ function renderOrPanel(d) {
   const headerLink = `<a href="https://openrouter.ai/rankings" target="_blank" rel="noopener" class="jump-inline">↗ 去 OpenRouter</a>`;
   const header = `<div class="or-header">${d.week_date ? "周 · " + esc(d.week_date) : ""}${headerLink}</div>`;
   const rows = d.items.map((r) => {
-    const name = r.matched_model || r.model_permaslug;
+    // 名字只用 OR 官方 short_name (display_name)；没有时直接显示 slug 原串。
+    // 不再回落到 matched_model —— 那是我们自家 alias 合并过的（如 M2.5/M2.7 都变 MiniMax-M2），失真。
+    const name = r.display_name || r.model_permaslug;
     const tok = r.total_tokens ? `${(r.total_tokens/1e9).toFixed(1)}B tok` : "—";
-    const chg = r.change_pct != null
-      ? (r.change_pct >= 0
-          ? `<span class="delta delta-up">+${Number(r.change_pct).toFixed(0)}%</span>`
-          : `<span class="delta delta-down">${Number(r.change_pct).toFixed(0)}%</span>`)
+    // change_pct 是小数（0.03 = 3%），网站上是 0.03*100=3%，之前漏了 *100 把 0.03 直接 toFixed(0)=0 显示成了 "0%"。
+    const chgPct = r.change_pct != null ? (r.change_pct * 100) : null;
+    const chg = chgPct != null
+      ? (chgPct >= 0
+          ? `<span class="delta delta-up">+${chgPct.toFixed(0)}%</span>`
+          : `<span class="delta delta-down">${chgPct.toFixed(0)}%</span>`)
       : `<span class="delta delta-flat">—</span>`;
     const href = (r.author && r.model_permaslug)
       ? `https://openrouter.ai/${r.author}/${r.model_permaslug}`

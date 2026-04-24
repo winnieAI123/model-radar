@@ -214,6 +214,7 @@ CREATE TABLE IF NOT EXISTS openrouter_rankings (
     request_count     INTEGER,
     change_pct        REAL,                     -- NULL = new（本周新进榜）
     matched_model     TEXT,                     -- canonical 对齐（find_mentions）
+    display_name      TEXT,                     -- OR 自家 short_name（"Claude Sonnet 4.6"），取自 /api/frontend/models
     scraped_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_or_week    ON openrouter_rankings(week_date, rank);
@@ -249,6 +250,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
     bp_cols = {r["name"] for r in conn.execute("PRAGMA table_info(blog_posts)").fetchall()}
     if "body_full" not in bp_cols:
         conn.execute("ALTER TABLE blog_posts ADD COLUMN body_full TEXT")
+
+    # openrouter_rankings: 加 display_name（OR 官方 short_name），Dashboard 显示用
+    or_cols = {r["name"] for r in conn.execute("PRAGMA table_info(openrouter_rankings)").fetchall()}
+    if "display_name" not in or_cols:
+        conn.execute("ALTER TABLE openrouter_rankings ADD COLUMN display_name TEXT")
 
 
 def _init_db(conn: sqlite3.Connection) -> None:
