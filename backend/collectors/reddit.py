@@ -28,7 +28,7 @@ BASE_URL = "https://www.reddit.com"
 DEFAULT_SUBREDDITS = [
     "LocalLLaMA",
     "StableDiffusion",
-    "singularity",
+    "OpenAI",
     "ChatGPT",
 ]
 
