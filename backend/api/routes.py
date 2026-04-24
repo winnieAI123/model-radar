@@ -50,14 +50,6 @@ _LB_TABS: dict[str, dict] = {
             {"source": "superclue", "category": "image_to_video", "label": "SuperCLUE"},
         ],
     },
-    "extras": {
-        "label": "更多",
-        "sources": [
-            {"source": "superclue", "category": "image_edit",    "label": "图像编辑"},
-            {"source": "superclue", "category": "ref_to_video",  "label": "参考视频"},
-            {"source": "superclue", "category": "text_to_speech","label": "文生语音"},
-        ],
-    },
 }
 
 

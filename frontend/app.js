@@ -3,7 +3,7 @@
 const $ = (sel) => document.querySelector(sel);
 
 const state = {
-  lbTab: "llm",                       // llm | t2i | t2v | i2v | extras
+  lbTab: "llm",                       // llm | t2i | t2v | i2v
   lbSource: 0,                        // 当前 tab 下的 source 索引
   lbData: null,                       // 缓存最近一次 dashboard.leaderboards
   alertFilter: { modality: "all", openness: "all" },  // 关键信号 panel 过滤器
