@@ -542,6 +542,46 @@ a.name:hover {
 }
 .secondary .details-body { border-top: 1px dotted var(--rule); }
 
+/* 调度健康面板 */
+.schedule-health { padding: 4px 0 8px; }
+.sh-hint {
+  padding: 10px 20px; font-family: var(--sans); font-size: 11px;
+  color: var(--muted); border-bottom: 1px dotted var(--rule);
+}
+.sh-hint code {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 10.5px; background: var(--panel-2); padding: 1px 6px;
+  border-radius: 3px; color: var(--text);
+}
+.sh-row {
+  display: grid; grid-template-columns: 180px 130px 90px 1fr;
+  align-items: center; gap: 14px;
+  padding: 8px 20px; border-bottom: 1px dotted var(--rule);
+  font-family: var(--serif); font-size: 13px; color: var(--text);
+}
+.sh-row:last-child { border-bottom: none; }
+.sh-row.sh-header {
+  background: var(--panel-2);
+  font-family: var(--sans); font-size: 10px;
+  color: var(--faint); letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 6px 20px;
+}
+.sh-row .sh-name {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px; color: var(--text);
+}
+.sh-row .sh-last,
+.sh-row .sh-interval {
+  font-family: var(--sans); font-size: 11px; color: var(--muted);
+}
+.sh-row .sh-status {
+  font-family: var(--sans); font-size: 11px; font-weight: 700;
+}
+.sh-ok       { color: var(--green); }
+.sh-overdue  { color: var(--accent); }
+.sh-failing  { color: var(--amber); }
+.sh-never    { color: var(--faint); }
+
 footer {
   text-align: center;
   font-family: var(--serif); color: var(--muted); font-size: 13px;

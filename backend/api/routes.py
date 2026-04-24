@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.api.auth import require_auth
 from backend.db import get_conn
+from backend.utils import config
 
 router = APIRouter(prefix="/api", dependencies=[Depends(require_auth)])
 
@@ -144,14 +145,36 @@ def timeline(
     return {"total": total, "items": [dict(r) for r in rows]}
 
 
+# collector 在 system_status 里的名字 → 对应 INTERVAL_XXX 配置项。
+# 对齐 main.py::_register_jobs 里的 IntervalTrigger 配置。mini_digest 一次调用
+# run_all() 写两条 system_status（opinions/themes），共享同一个 interval。
+_COLLECTOR_INTERVALS = {
+    "leaderboard":          "INTERVAL_LEADERBOARD_MIN",
+    "github":               "INTERVAL_GITHUB_MIN",
+    "diff_engine":          "INTERVAL_DIFF_MIN",
+    "alert_p0":             "INTERVAL_P0_ALERT_MIN",
+    "heat_scorer":          "INTERVAL_HEAT_MIN",
+    "reddit":               "INTERVAL_REDDIT_MIN",
+    "huggingface":          "INTERVAL_HF_MIN",
+    "blog_rss":             "INTERVAL_BLOG_MIN",
+    "openrouter":           "INTERVAL_OPENROUTER_MIN",
+    "wechat_rss":           "INTERVAL_WECHAT_MIN",
+    "mini_digest_opinions": "INTERVAL_MINI_DIGEST_MIN",
+    "mini_digest_themes":   "INTERVAL_MINI_DIGEST_MIN",
+}
+
+
 @router.get("/status")
 def status():
-    """系统健康：每个 collector 的最后运行时间和失败计数。"""
+    """系统健康：每个 collector 的最后运行时间、失败计数，以及相对期望节奏的超期情况。"""
     with get_conn() as conn:
         rows = conn.execute(
             "SELECT collector, last_run_at, last_success_at, last_error, consecutive_fails "
             "FROM system_status ORDER BY collector"
         ).fetchall()
+        now_row = conn.execute("SELECT datetime('now') AS now").fetchone()
+        db_now = now_row["now"]  # UTC "YYYY-MM-DD HH:MM:SS"
+
         counts = {}
         for t, sql in [
             ("leaderboard_rows", "SELECT COUNT(*) FROM leaderboard_snapshots"),
@@ -161,9 +184,37 @@ def status():
             ("pending_alerts",   "SELECT COUNT(*) FROM change_events WHERE alerted=0 AND severity='P0'"),
         ]:
             counts[t] = conn.execute(sql).fetchone()[0]
+
+    from datetime import datetime
+    try:
+        now_dt = datetime.strptime(db_now, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        now_dt = None
+
+    enriched = []
+    for r in rows:
+        d = dict(r)
+        attr = _COLLECTOR_INTERVALS.get(d["collector"])
+        interval = getattr(config, attr, None) if attr else None
+        d["expected_interval_min"] = interval
+        d["is_overdue"] = False
+        d["overdue_by_min"] = None
+        if interval and d["last_run_at"] and now_dt:
+            try:
+                last_dt = datetime.strptime(d["last_run_at"], "%Y-%m-%d %H:%M:%S")
+                delta_min = (now_dt - last_dt).total_seconds() / 60
+                # 容忍 20% 时钟/冷启动误差，避免 interval 边缘抖动误报
+                if delta_min > interval * 1.2:
+                    d["is_overdue"] = True
+                    d["overdue_by_min"] = round(delta_min - interval, 1)
+            except Exception:
+                pass
+        enriched.append(d)
+
     return {
-        "collectors": [dict(r) for r in rows],
+        "collectors": enriched,
         "counts": counts,
+        "server_now": db_now,
     }
 
 

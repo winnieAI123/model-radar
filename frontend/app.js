@@ -454,7 +454,7 @@ async function loadDashboard() {
   renderThemesPanel(d.themes);
 }
 
-// ── 底栏统计 + 最后刷新时间 ──
+// ── 底栏统计 + 最后刷新时间 + 调度健康 ──
 async function loadStatus() {
   const s = await jfetch("/api/status");
   const c = s.counts || {};
@@ -468,6 +468,71 @@ async function loadStatus() {
    .join(`<span class="sep">·</span>`);
   $("#footer-stats").innerHTML = statsHtml;
   $("#last-update").textContent = "刷新 " + new Date().toTimeString().slice(0, 5);
+
+  renderScheduleHealth(s.collectors || []);
+}
+
+// "240" (分钟) → "4h" / "30m" / "7d" 人类可读
+function fmtInterval(min) {
+  if (min == null) return "—";
+  if (min < 60) return `${min}m`;
+  if (min < 1440) return `${(min / 60).toFixed(min % 60 ? 1 : 0)}h`;
+  return `${(min / 1440).toFixed(min % 1440 ? 1 : 0)}d`;
+}
+
+function renderScheduleHealth(collectors) {
+  const holder = $("#schedule-health");
+  if (!holder) return;
+  if (!collectors.length) {
+    holder.innerHTML = `<div class="empty" style="padding:16px">暂无调度数据</div>`;
+    $("#schedule-overdue-count").textContent = "0";
+    return;
+  }
+  // 排序：超期的在前，按超期时间降序；其余按 collector 名字母序
+  const sorted = collectors.slice().sort((a, b) => {
+    if (a.is_overdue !== b.is_overdue) return a.is_overdue ? -1 : 1;
+    if (a.is_overdue && b.is_overdue) return (b.overdue_by_min || 0) - (a.overdue_by_min || 0);
+    return a.collector.localeCompare(b.collector);
+  });
+  const overdueCount = collectors.filter((r) => r.is_overdue).length;
+  $("#schedule-overdue-count").textContent = String(overdueCount);
+  const badge = $("#schedule-overdue-count");
+  if (badge) badge.style.color = overdueCount ? "var(--accent)" : "var(--faint)";
+
+  const rows = sorted.map((r) => {
+    const last = r.last_run_at ? relTime(r.last_run_at) : "从未运行";
+    const interval = fmtInterval(r.expected_interval_min);
+    const fails = r.consecutive_fails || 0;
+    let statusHtml;
+    if (!r.last_run_at) {
+      statusHtml = `<span class="sh-status sh-never">⚪ 未跑过</span>`;
+    } else if (r.is_overdue) {
+      statusHtml = `<span class="sh-status sh-overdue">🔴 超期 ${fmtInterval(Math.round(r.overdue_by_min))}</span>`;
+    } else if (fails > 0) {
+      statusHtml = `<span class="sh-status sh-failing">🟠 连续失败 ${fails}</span>`;
+    } else {
+      statusHtml = `<span class="sh-status sh-ok">🟢 正常</span>`;
+    }
+    const errTip = r.last_error ? ` title="${esc(r.last_error).slice(0, 200)}"` : "";
+    return `
+    <div class="sh-row"${errTip}>
+      <span class="sh-name">${esc(r.collector)}</span>
+      <span class="sh-last">${last}</span>
+      <span class="sh-interval">每 ${interval}</span>
+      ${statusHtml}
+    </div>`;
+  }).join("");
+  const header = `
+    <div class="sh-row sh-header">
+      <span class="sh-name">Collector</span>
+      <span class="sh-last">最后运行</span>
+      <span class="sh-interval">期望节奏</span>
+      <span>状态</span>
+    </div>`;
+  const hint = overdueCount
+    ? `<div class="sh-hint">⚠ ${overdueCount} 个板块超过期望节奏。SSH 查 log：<code>railway logs --filter '${esc(sorted[0].collector)}'</code></div>`
+    : `<div class="sh-hint">✓ 全部 collector 在节奏内运行</div>`;
+  holder.innerHTML = hint + header + rows;
 }
 
 // ── 历史周报 ──
