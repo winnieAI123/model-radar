@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 
 from backend.db import get_conn, record_status
 from backend.engine import reddit_opinions, reddit_themes
+from backend.utils.model_family import rollup_opinions
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,8 @@ def run_opinions(days: int = DEFAULT_WINDOW_DAYS) -> dict:
     logger.info("[MiniDigest] opinions start (days=%d)", days)
     try:
         payload = reddit_opinions.generate(days=days) or {"models": []}
+        # 显示层：合到 family 粒度（canonical 原始数据不变）
+        payload = rollup_opinions(payload)
         _write_cache("opinions", days, payload)
         record_status("mini_digest_opinions", success=True)
         logger.info("[MiniDigest] opinions done · model_count=%d",

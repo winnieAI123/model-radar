@@ -825,10 +825,12 @@ def generate_and_send(days: int = 7, dry_run: bool = False) -> dict:
         _persist(data, html)
 
         # 周报跑完把 opinions / themes 也写进 digest_cache，保证周一清晨 Dashboard 聚合板块立刻有内容。
+        # 注：周报邮件正文 _render_html(data) 已经用原始 per-canonical 数据渲染完毕，此处双写只影响 Dashboard 显示。
         try:
             from backend.engine import mini_digest
+            from backend.utils.model_family import rollup_opinions
             if data.get("opinions"):
-                mini_digest._write_cache("opinions", days, data["opinions"])
+                mini_digest._write_cache("opinions", days, rollup_opinions(data["opinions"]))
             if data.get("themes"):
                 mini_digest._write_cache("themes", days, data["themes"])
         except Exception as cache_err:
