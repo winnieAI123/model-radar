@@ -14,6 +14,7 @@
 中文特色榜（image_edit / text_to_speech / ref_to_video）按用户决策不进入周报。
 """
 import logging
+import re
 from datetime import datetime, timedelta
 
 from backend.db import get_conn
@@ -21,6 +22,56 @@ from backend.utils import llm_client
 from backend.utils.model_alias import normalize
 
 logger = logging.getLogger(__name__)
+
+
+# 家族聚合：用于 Top 20 "席位占比" 统计。匹配 canonical 和 model_name 任一命中即归类。
+# 谨慎起见只覆盖高置信前缀，没命中的归 None（不会被强塞进 Others，避免误导）。
+FAMILY_PATTERNS: list[tuple[str, "re.Pattern[str]"]] = [
+    ("Claude",    re.compile(r"claude", re.I)),
+    ("GPT / o-series", re.compile(r"\bgpt[-\s]?\d|\bchatgpt\b|^o[1-4]\b|^o[1-4][-\s]", re.I)),
+    ("Gemini",    re.compile(r"gemini|imagen|nano[-\s]?banana|bard", re.I)),
+    ("Qwen",      re.compile(r"\bqwen|qwq", re.I)),
+    ("DeepSeek",  re.compile(r"deepseek", re.I)),
+    ("GLM",       re.compile(r"\bglm[-\s]?\d", re.I)),
+    ("Llama",     re.compile(r"llama", re.I)),
+    ("Mistral",   re.compile(r"mistral|mixtral", re.I)),
+    ("Grok",      re.compile(r"\bgrok\b", re.I)),
+    ("Kimi",      re.compile(r"\bkimi\b|moonshot", re.I)),
+    ("MiniMax",   re.compile(r"minimax|hailuo|\babab\b", re.I)),
+    ("Step",      re.compile(r"\bstep[-_ ]?\d", re.I)),
+    ("Doubao",    re.compile(r"doubao|豆包|seedream|seedance", re.I)),
+    ("ERNIE",     re.compile(r"ernie|文心", re.I)),
+    ("Yi",        re.compile(r"^yi[-_ ]", re.I)),
+    ("Kling",     re.compile(r"kling|可灵", re.I)),
+    ("Veo",       re.compile(r"\bveo[-\s]?\d", re.I)),
+    ("Sora",      re.compile(r"\bsora\b", re.I)),
+    ("Runway",    re.compile(r"runway|\bgen-?[34]\b", re.I)),
+    ("Flux",      re.compile(r"\bflux[-\s]?\d|\bflux\b", re.I)),
+    ("Ideogram",  re.compile(r"ideogram", re.I)),
+    ("Midjourney", re.compile(r"midjourney|\bmj[-_ ]?v?\d", re.I)),
+    ("Pika",      re.compile(r"\bpika\b", re.I)),
+    ("WAN",       re.compile(r"^wan[-_ ]?\d", re.I)),
+    ("Hunyuan",   re.compile(r"hunyuan|混元", re.I)),
+]
+
+
+def _family_of(model_name: str, canonical: str | None = None) -> str | None:
+    """尽力给模型归类到已知家族；没命中返回 None（UI 显示不占席位统计）。"""
+    text = f"{canonical or ''} {model_name or ''}"
+    for fam, pat in FAMILY_PATTERNS:
+        if pat.search(text):
+            return fam
+    return None
+
+
+def _count_families(items: list[dict]) -> list[tuple[str, int]]:
+    """按出现次数倒序返回 [(family, count), ...]。未归类的不计入。"""
+    counts: dict[str, int] = {}
+    for it in items:
+        fam = _family_of(it.get("model_name", ""), it.get("canonical"))
+        if fam:
+            counts[fam] = counts.get(fam, 0) + 1
+    return sorted(counts.items(), key=lambda x: -x[1])
 
 DOMAINS: dict[str, str] = {
     "text":           "LLM 对话",
@@ -145,12 +196,14 @@ def _gather_one_platform(conn, source: str, category: str,
             "score":      r["score"],
             "change":     _compute_change(r["model_name"], r["rank"], previous_map),
         })
+    family_counts = _count_families(items)
     return {
-        "source":       source,
-        "top_n":        items,
-        "has_baseline": has_baseline,
-        "scraped_at":   latest,
-        "public_url":   public_url,
+        "source":        source,
+        "top_n":         items,
+        "has_baseline":  has_baseline,
+        "scraped_at":    latest,
+        "public_url":    public_url,
+        "family_counts": family_counts,
     }
 
 
@@ -162,6 +215,11 @@ def _format_platforms_for_prompt(platforms: list[dict]) -> str:
             lines.append(f"### {src_label}: 无数据")
             continue
         lines.append(f"### {src_label}")
+        fams = p.get("family_counts") or []
+        if fams:
+            fam_str = "、".join(f"{name} {n}席" for name, n in fams if n >= 2)
+            if fam_str:
+                lines.append(f"_家族占比（Top {len(p['top_n'])}）_: {fam_str}")
         for it in p["top_n"]:
             name = it["model_name"]
             can = f" [canonical={it['canonical']}]" if it["canonical"] and it["canonical"] != name else ""
@@ -191,7 +249,9 @@ def _llm_domain_summary(domain_title: str, platforms: list[dict]) -> tuple[str, 
         f"- {baseline_note}\n"
         f"- 如果某模型在多家平台都登顶，要点出『跨平台登顶』。\n"
         f"- 如果只有 1 家平台覆盖这个领域，直接讲该平台 Top 1-2 的对比即可。\n"
-        f"- ⚠️ 再次强调：只讲名字+排名事实，不要推断厂商归属（除非模型名前缀本身一模一样）。\n\n"
+        f"- 我额外给你每家平台 Top 20 的『家族席位占比』（只统计 ≥2 席的家族，我已经预先聚合好了）。"
+        f"如果某家族占比显著（比如 ≥5 席、或领先其他家族 2 席以上），可以在总结里点出；占比不显著就不用强调。\n"
+        f"- ⚠️ 只讲名字+排名事实，不要推断厂商归属（除非模型名前缀本身一模一样，或我给的『家族占比』已经标好了）。\n\n"
         f"--- 数据 ---\n"
         f"{_format_platforms_for_prompt(platforms)}\n\n"
         f"直接输出一段纯文本（不要加标题、不要 Markdown 列表、不要代码块），40-80 字。"
