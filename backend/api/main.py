@@ -71,7 +71,7 @@ def _run_weekly(): weekly_report.generate_and_send(days=7, dry_run=False)
 
 def _cold_start():
     logger.info("=" * 60)
-    logger.info("冷启动：leaderboard → github → hf → blog → openrouter → wechat → diff → p0 → heat")
+    logger.info("冷启动：leaderboard → github → hf → blog → openrouter → wechat → reddit → diff → p0 → heat → mini_digest")
     logger.info("=" * 60)
     _safe(_run_leaderboard, "leaderboard")()
     _safe(_run_github, "github")()
@@ -79,9 +79,15 @@ def _cold_start():
     _safe(_run_blog, "blog_rss")()
     _safe(_run_openrouter, "openrouter")()
     _safe(_run_wechat, "wechat_rss")()
+    # reddit 必须加入冷启动：interval=360min，每次 redeploy 会把 APScheduler 计时器归零，
+    # 没有冷启动触发的话，频繁部署期评论表会长期空置，社区声音总结退化到只啃标题。
+    _safe(_run_reddit, "reddit")()
     _safe(_run_diff, "diff")()
     _safe(_run_alerts, "p0_alert")()
     _safe(_run_heat, "heat")()
+    # mini_digest 接在 reddit 后面：确保 Dashboard 社区声音/热议用上最新评论，
+    # 否则周中 Dashboard 会一直读 12h 前的缓存（尤其 redeploy 重置 interval 后）。
+    _safe(_run_mini_digest, "mini_digest")()
 
 
 # 单线程执行器：所有 job 串行跑，避免 SQLite 写锁冲突（WAL 只允许一个写者）。
