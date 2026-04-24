@@ -393,23 +393,30 @@ function renderOpinionsPanel(d) {
     return;
   }
   $("#p-opinions").classList.remove("loading");
-  $("#p-opinions").innerHTML = models.slice(0, 3).map((m) => {
+  $("#p-opinions").innerHTML = models.slice(0, 5).map((m) => {
     const name = m.model || m.name || m.model_name || "—";
     const postCount = m.post_count ?? 0;
     const opinions = Array.isArray(m.opinions) ? m.opinions : (Array.isArray(m.quotes) ? m.quotes : []);
-    const first = opinions[0];
-    const quoteText = first ? (first.quote || first.text || String(first)) : "";
-    const quoteUrl = first ? (first.url || first.permalink || "") : "";
-    const meta = postCount ? `<span class="meta">· ${postCount} 帖</span>` : "";
-    const quoteHtml = quoteText
-      ? (quoteUrl
-          ? `<a class="quote" href="${esc(quoteUrl)}" target="_blank" rel="noopener">「${esc(String(quoteText).slice(0, 140))}」</a>`
-          : `<div class="quote">「${esc(String(quoteText).slice(0, 140))}」</div>`)
-      : "";
+    const meta = postCount
+      ? `<span class="meta">· ${postCount} 帖 · ${opinions.length} 条观点</span>`
+      : `<span class="meta">· ${opinions.length} 条观点</span>`;
+    const quotesHtml = opinions.slice(0, 3).map((o) => {
+      const quoteText = o.quote || o.text || String(o);
+      if (!quoteText) return "";
+      const quoteUrl = o.url || o.permalink || "";
+      const srcLabel = o.source === "comment" ? "评论" : (o.source === "post" ? "原帖" : "");
+      const badge = srcLabel
+        ? `<span class="src-badge src-${esc(o.source)}">${srcLabel}</span>`
+        : "";
+      const body = `${badge}「${esc(String(quoteText).slice(0, 160))}」`;
+      return quoteUrl
+        ? `<a class="quote" href="${esc(quoteUrl)}" target="_blank" rel="noopener">${body}</a>`
+        : `<div class="quote">${body}</div>`;
+    }).join("");
     return `
       <div class="opinion-item">
         <div class="model">${esc(name)} ${meta}</div>
-        ${quoteHtml}
+        ${quotesHtml}
       </div>`;
   }).join("");
 }

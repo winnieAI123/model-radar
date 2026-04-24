@@ -396,9 +396,22 @@ a.name:hover {
   overflow: hidden;
 }
 .opinion-item .quote {
+  display: block;
   font-family: var(--serif); font-style: italic;
   font-size: 12px; color: var(--muted); margin-top: 8px;
   padding-left: 10px; border-left: 2px solid var(--accent);
+  text-decoration: none;
+}
+.opinion-item a.quote:hover { color: var(--text); }
+.opinion-item .src-badge {
+  display: inline-block; font-style: normal;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.02em;
+  padding: 1px 6px; margin-right: 6px; vertical-align: 1px;
+  border: 1px solid var(--rule); border-radius: 2px;
+  color: var(--muted); background: var(--panel-2);
+}
+.opinion-item .src-comment {
+  color: var(--accent); border-color: var(--accent);
 }
 
 /* Themes */
