@@ -420,16 +420,20 @@ def _panel_hf(conn) -> dict:
 
 
 def _panel_openrouter(conn) -> dict:
-    """OpenRouter 最新一周 Top 10。"""
+    """OpenRouter 最新一周 Top 10（表无 UNIQUE 约束，冷启动每次都会 INSERT 一批同数据，必须筛出最近一次 scrape）。"""
     latest = conn.execute(
         "SELECT MAX(week_date) FROM openrouter_rankings"
     ).fetchone()[0]
     if not latest:
         return {"updated_at": _last_success(conn, "openrouter"), "week_date": None, "items": []}
+    last_scrape = conn.execute(
+        "SELECT MAX(scraped_at) FROM openrouter_rankings WHERE week_date=?",
+        (latest,),
+    ).fetchone()[0]
     rows = conn.execute(
         "SELECT rank, model_permaslug, author, total_tokens, request_count, change_pct, matched_model "
-        "FROM openrouter_rankings WHERE week_date=? ORDER BY rank LIMIT 10",
-        (latest,),
+        "FROM openrouter_rankings WHERE week_date=? AND scraped_at=? ORDER BY rank LIMIT 10",
+        (latest, last_scrape),
     ).fetchall()
     return {
         "updated_at": _last_success(conn, "openrouter"),

@@ -152,7 +152,8 @@ def _match_model(slug: str) -> str | None:
 
 
 def _persist(conn, week_date: str, ranked: list[tuple[str, dict]]) -> int:
-    """写 Top N 到 openrouter_rankings。同一 scrape 视为一个快照（scraped_at 同秒）。"""
+    """写 Top N 到 openrouter_rankings。同 week_date 的旧数据先清掉，避免 redeploy 累积重复快照。"""
+    conn.execute("DELETE FROM openrouter_rankings WHERE week_date=?", (week_date[:10],))
     inserted = 0
     for rank, (slug, v) in enumerate(ranked[:TOP_N], start=1):
         author = slug.split("/", 1)[0] if "/" in slug else None
