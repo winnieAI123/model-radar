@@ -232,7 +232,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
 def _init_db(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA busy_timeout=30000")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA_SQL)
     _migrate(conn)
@@ -252,7 +252,7 @@ def get_conn():
     """
     global _initialized
     _ensure_dir()
-    conn = sqlite3.connect(config.DB_PATH, timeout=10)
+    conn = sqlite3.connect(config.DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     try:
         if not _initialized:
@@ -260,6 +260,8 @@ def get_conn():
                 if not _initialized:
                     _init_db(conn)
                     _initialized = True
+        # 所有连接均开启 WAL busy 等待，避免批量写时第二个写者瞬间 busy 报错
+        conn.execute("PRAGMA busy_timeout=30000")
         yield conn
         conn.commit()
     except Exception:

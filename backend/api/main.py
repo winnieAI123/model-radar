@@ -12,6 +12,7 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 
+from apscheduler.executors.pool import ThreadPoolExecutor
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -83,7 +84,12 @@ def _cold_start():
     _safe(_run_heat, "heat")()
 
 
-scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
+# 单线程执行器：所有 job 串行跑，避免 SQLite 写锁冲突（WAL 只允许一个写者）。
+# 之前多个 job 同 tick 撞车导致 mini_digest / github 偶发 "database is locked"。
+scheduler = BackgroundScheduler(
+    timezone="Asia/Shanghai",
+    executors={"default": ThreadPoolExecutor(max_workers=1)},
+)
 
 
 def _register_jobs():
