@@ -258,6 +258,7 @@ function renderOrPanel(d) {
 }
 
 // ── Panel 5 · 社区声音 (opinions) ──
+// reddit_opinions.generate() payload：{models: [{model, post_count, opinions:[{quote,url}], used_llm}]}
 function renderOpinionsPanel(d) {
   setUpdated("#u-opinions", d.generated_at);
   const models = d.payload?.models;
@@ -268,14 +269,22 @@ function renderOpinionsPanel(d) {
   }
   $("#p-opinions").classList.remove("loading");
   $("#p-opinions").innerHTML = models.slice(0, 3).map((m) => {
-    const name = m.name || m.model_name || "—";
-    const summary = m.summary || m.opinion_summary || m.text || "";
-    const quote = Array.isArray(m.quotes) && m.quotes.length ? m.quotes[0].text || m.quotes[0] : "";
+    const name = m.model || m.name || m.model_name || "—";
+    const postCount = m.post_count ?? 0;
+    const opinions = Array.isArray(m.opinions) ? m.opinions : (Array.isArray(m.quotes) ? m.quotes : []);
+    const first = opinions[0];
+    const quoteText = first ? (first.quote || first.text || String(first)) : "";
+    const quoteUrl = first ? (first.url || first.permalink || "") : "";
+    const meta = postCount ? `<span class="meta">· ${postCount} 帖</span>` : "";
+    const quoteHtml = quoteText
+      ? (quoteUrl
+          ? `<a class="quote" href="${esc(quoteUrl)}" target="_blank" rel="noopener">「${esc(String(quoteText).slice(0, 140))}」</a>`
+          : `<div class="quote">「${esc(String(quoteText).slice(0, 140))}」</div>`)
+      : "";
     return `
       <div class="opinion-item">
-        <div class="model">${esc(name)}</div>
-        <div class="summary">${esc(summary)}</div>
-        ${quote ? `<div class="quote">「${esc(String(quote).slice(0, 140))}」</div>` : ""}
+        <div class="model">${esc(name)} ${meta}</div>
+        ${quoteHtml}
       </div>`;
   }).join("");
 }

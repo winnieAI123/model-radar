@@ -129,9 +129,11 @@ def _aggregate_latest_week(rows: list[dict]) -> tuple[str, list[dict]]:
         if a["change"] is None and r["change"] is not None:
             a["change"] = r["change"]
 
+    # 对齐 openrouter.ai/rankings 页面的 "Tokens" 列：completion + prompt + reasoning。
+    # 早期版本只算 completion+prompt，对 reasoning 重的模型（如 xiaomi/mimo）会偏低，和 OR 官方名次差 1 位。
     ranked = sorted(
         [(slug, v) for slug, v in agg.items()],
-        key=lambda x: -(x[1]["completion"] + x[1]["prompt"]),
+        key=lambda x: -(x[1]["completion"] + x[1]["prompt"] + x[1]["reasoning"]),
     )
     return latest_date, ranked
 
@@ -157,7 +159,7 @@ def _persist(conn, week_date: str, ranked: list[tuple[str, dict]]) -> int:
     inserted = 0
     for rank, (slug, v) in enumerate(ranked[:TOP_N], start=1):
         author = slug.split("/", 1)[0] if "/" in slug else None
-        total = v["completion"] + v["prompt"]
+        total = v["completion"] + v["prompt"] + v["reasoning"]
         matched = _match_model(slug)
         cur = conn.execute(
             """
