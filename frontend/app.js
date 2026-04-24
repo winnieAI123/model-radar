@@ -390,17 +390,9 @@ async function loadDashboard() {
   renderThemesPanel(d.themes);
 }
 
-// ── 系统健康（折叠区） ──
+// ── 底栏统计 + 最后刷新时间 ──
 async function loadStatus() {
   const s = await jfetch("/api/status");
-  const fails = s.collectors.filter((c) => c.consecutive_fails > 0).length;
-  const dot = $("#health-dot");
-  if (fails === 0) { dot.dataset.state = "ok"; dot.title = "所有采集器正常"; }
-  else if (fails <= 1) { dot.dataset.state = "warn"; dot.title = `${fails} 个采集器异常`; }
-  else { dot.dataset.state = "fail"; dot.title = `${fails} 个采集器异常`; }
-
-  $("#collectors-hint").textContent = fails === 0 ? "全部正常" : `${fails} 项异常`;
-
   const c = s.counts || {};
   const statsHtml = [
     ["榜单快照", c.leaderboard_rows],
@@ -411,27 +403,7 @@ async function loadStatus() {
    .map(([k, v]) => `<span>${esc(k)} ${v.toLocaleString()}</span>`)
    .join(`<span class="sep">·</span>`);
   $("#footer-stats").innerHTML = statsHtml;
-
-  if ($("#collectors-details").open) renderCollectors(s.collectors);
-  else loadStatus._cached = s.collectors;
-
   $("#last-update").textContent = "刷新 " + new Date().toTimeString().slice(0, 5);
-}
-
-function renderCollectors(collectors) {
-  $("#collectors").innerHTML = collectors.map((c) => {
-    const ok = !c.last_error && c.consecutive_fails === 0;
-    const stale = !ok && c.last_success_at;
-    const cls = ok ? "ok" : (stale ? "stale" : "fail");
-    return `
-      <div class="collector-row">
-        <div class="left">
-          <span class="status-dot ${cls}"></span>
-          <span class="name">${esc(c.collector)}</span>
-        </div>
-        <span class="time">${relTime(c.last_run_at)} · ${c.consecutive_fails ? `失败 x${c.consecutive_fails}` : "ok"}</span>
-      </div>`;
-  }).join("");
 }
 
 // ── 历史周报 ──
@@ -488,23 +460,6 @@ function openReportModal(week, html) {
   modal.classList.add("open");
 }
 
-// ── 待归一化 ──
-async function loadPending() {
-  const rows = await jfetch("/api/pending-mapping?limit=20");
-  $("#pending-hint").textContent = rows.length ? `${rows.length} 条待处理` : "全部已归一化";
-  if (!rows.length) {
-    $("#pending").innerHTML = `<div style="padding:24px;color:var(--muted);text-align:center;">全部已归一化 🎉</div>`;
-    return;
-  }
-  $("#pending").innerHTML = rows.map((r) => `
-    <div class="pending-row">
-      <span>${esc(r.raw_name)}</span>
-      <span class="src">${esc(r.source)}</span>
-      <span class="count">x${r.seen_count}</span>
-    </div>
-  `).join("");
-}
-
 // ── Wire ──
 async function refreshAll() {
   await Promise.all([
@@ -512,7 +467,6 @@ async function refreshAll() {
     loadStatus().catch((e) => console.error("status", e)),
   ]);
   if ($("#weekly-reports-section").open) loadWeeklyReports().catch((e) => console.error("weekly", e));
-  if ($("#pending-details").open) loadPending().catch((e) => console.error("pending", e));
 }
 
 // Leaderboard tab 切换
@@ -532,25 +486,11 @@ $("#alert-bar").addEventListener("toggle", (ev) => {
 });
 
 // 折叠区 lazy load
-$("#collectors-details").addEventListener("toggle", (ev) => {
-  if (ev.target.open) {
-    if (loadStatus._cached) renderCollectors(loadStatus._cached);
-    else loadStatus();
-  }
-});
 $("#weekly-reports-section").addEventListener("toggle", (ev) => {
   if (ev.target.open) loadWeeklyReports().catch((e) => console.error("weekly", e));
 });
-$("#pending-details").addEventListener("toggle", (ev) => {
-  if (ev.target.open) loadPending().catch((e) => console.error("pending", e));
-});
 
 $("#refresh").addEventListener("click", refreshAll);
-$("#health-dot").addEventListener("click", () => {
-  const el = $("#collectors-details");
-  el.open = true;
-  el.scrollIntoView({ behavior: "smooth", block: "start" });
-});
 
 refreshAll();
 setInterval(refreshAll, 60000);
