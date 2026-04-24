@@ -41,6 +41,13 @@ HEADERS = {
 
 # 正文截断阈值。Reddit 长帖动辄几千字，对匹配和存储都没必要。
 SELFTEXT_TRUNC = 800
+# 一级评论单条截断（防极端长评论撑爆 DB / LLM 输入）
+COMMENT_BODY_TRUNC = 2000
+# Phase 3 评论抓取预算：单次采集跑完后，只给"最有讨论价值"的贴抓评论
+COMMENT_FETCH_MAX_POSTS = 15    # 单 run 最多给这么多贴抓评论
+COMMENT_MIN_SCORE = 5           # 帖子得分门槛
+COMMENT_MIN_NUM = 5             # 帖子评论数门槛（<5 太冷清）
+COMMENT_PER_POST_LIMIT = 20     # 每贴抓 Top N 一级评论
 
 # 模型关键词抽取：从 title 中抠出英文/数字/点/斜杠/短横组成的 token。
 # 像 "GPT-5 is crazy" → 拿到 "GPT-5"；"openai/gpt-4o beats..." → "openai/gpt-4o"。
@@ -113,6 +120,69 @@ def _persist(conn, post: dict, matched_model: str | None, matched_in: str | None
         ),
     )
     return cur.rowcount > 0
+
+
+def _fetch_post_comments(session: requests.Session, post_url: str,
+                         limit: int = COMMENT_PER_POST_LIMIT) -> list[dict]:
+    """抓某帖的一级评论（kind='t1', depth=1）。
+
+    Reddit post.json 返回两元数组 [listing_post, listing_comments]，只看后者的 children。
+    过滤掉 removed/deleted 的占位，截断极端长评论。失败不抛异常（评论抓不到不该阻塞整体采集）。
+
+    借鉴：/Users/winnie/.claude/skills/user-research-analyst/scripts/collectors/reddit_collector.py 的 get_post_comments
+    """
+    json_url = post_url.rstrip('/') + f".json?limit={limit}&depth=1"
+    try:
+        resp = session.get(json_url, timeout=15)
+        if resp.status_code == 429:
+            logger.warning("[Reddit][comments] 429 on %s, sleep 60s", post_url)
+            time.sleep(60)
+            return []
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        logger.warning("[Reddit][comments] fetch fail %s: %s", post_url, e)
+        return []
+
+    if not isinstance(data, list) or len(data) < 2:
+        return []
+    children = (data[1].get("data") or {}).get("children", [])
+
+    out: list[dict] = []
+    for c in children:
+        if c.get("kind") != "t1":
+            continue  # 跳过 "more" 占位符
+        d = c.get("data") or {}
+        body = (d.get("body") or "").strip()
+        if not body or body in ("[removed]", "[deleted]"):
+            continue
+        out.append({
+            "comment_id":  d.get("id"),
+            "author":      d.get("author"),
+            "body":        body[:COMMENT_BODY_TRUNC],
+            "score":       d.get("score", 0),
+            "created_utc": int(d.get("created_utc")) if d.get("created_utc") else None,
+        })
+    return out
+
+
+def _persist_comments(conn, post_id: str, comments: list[dict]) -> int:
+    """批量入库。(post_id, comment_id) 主键，重复走 REPLACE（更新 score/body 供分析用最新值）。"""
+    n = 0
+    for c in comments:
+        if not c.get("comment_id"):
+            continue
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO reddit_comments
+              (post_id, comment_id, author, body, score, created_utc)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (post_id, c["comment_id"], c.get("author"), c.get("body"),
+             c.get("score", 0), c.get("created_utc")),
+        )
+        n += 1
+    return n
 
 
 def _parse_listing(data: dict, subreddit: str) -> list[dict]:
@@ -273,8 +343,53 @@ def collect(subreddits: list[str] | None = None,
                         if not is_last:
                             time.sleep(random.uniform(2.0, 4.0))
 
+            # ---- Phase 3: 评论补齐 ----
+            # 挑"最有讨论价值"的 matched 贴抓一级评论（供 reddit_opinions 基于真实用户回复总结）。
+            # 门槛：matched_model 非空 + score≥COMMENT_MIN_SCORE + num_comments≥COMMENT_MIN_NUM。
+            # 预算：单 run 最多 COMMENT_FETCH_MAX_POSTS 条，不然 HTTP 节奏太慢会把整轮 collect 拖垮。
+            # 已经抓过评论的帖子本轮不再重抓（用 reddit_comments 表做去重；pulse 段可能反复推新同一贴）。
+            comments_total = 0
+            comment_posts_hit = 0
+            try:
+                candidates = conn.execute(
+                    """
+                    SELECT p.post_id, p.url, p.score, p.num_comments
+                    FROM reddit_posts p
+                    WHERE p.matched_model IS NOT NULL AND p.matched_model <> ''
+                      AND p.score >= ?
+                      AND p.num_comments >= ?
+                      AND NOT EXISTS (SELECT 1 FROM reddit_comments c WHERE c.post_id = p.post_id)
+                    ORDER BY p.score DESC, p.num_comments DESC
+                    LIMIT ?
+                    """,
+                    (COMMENT_MIN_SCORE, COMMENT_MIN_NUM, COMMENT_FETCH_MAX_POSTS),
+                ).fetchall()
+
+                for idx, row in enumerate(candidates):
+                    post_id = row["post_id"]
+                    post_url = row["url"]
+                    if not post_id or not post_url:
+                        continue
+                    comments = _fetch_post_comments(session, post_url, limit=COMMENT_PER_POST_LIMIT)
+                    if comments:
+                        n = _persist_comments(conn, post_id, comments)
+                        comments_total += n
+                        comment_posts_hit += 1
+                        logger.info("[Reddit][comments] post %s: fetched=%d stored=%d",
+                                    post_id, len(comments), n)
+                    # 节奏控制：借鉴 user-research-analyst 的 1-2s jitter，避免触发 Reddit 限流
+                    if idx < len(candidates) - 1:
+                        time.sleep(random.uniform(1.0, 2.0))
+
+                logger.info("[Reddit][comments] phase3: %d posts, %d comments stored",
+                            comment_posts_hit, comments_total)
+            except Exception as e:
+                # 评论阶段失败不应阻断整轮成功标记；只记 WARN
+                logger.warning("[Reddit][comments] phase3 异常跳过: %s", e)
+
         record_status("reddit", success=True)
-        return {"pulse": pulse_summary, "search": search_summary}
+        return {"pulse": pulse_summary, "search": search_summary,
+                "comments": {"posts": comment_posts_hit, "total": comments_total}}
     except Exception as e:
         logger.exception("Reddit 采集整体失败: %s", e)
         record_status("reddit", success=False, error=str(e))

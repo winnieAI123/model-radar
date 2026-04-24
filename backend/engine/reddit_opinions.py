@@ -31,11 +31,12 @@ logger = logging.getLogger(__name__)
 
 
 HUMANIZER_PRINCIPLES = """写作原则：
-- 忠实复述用户原帖核心观点，不夸大。禁用："展现了卓越能力"/"令人瞩目"/"里程碑式"/"彻底改变"/"引领潮流"。
+- 忠实复述用户原帖或**评论区**核心观点，不夸大。禁用："展现了卓越能力"/"令人瞩目"/"里程碑式"/"彻底改变"/"引领潮流"。
 - 短句优先。每条观点 30-80 字。
-- 具体 > 抽象：原帖提到什么场景、什么对比、什么 bug，就说什么；别说"反响热烈"这种空话。
-- 使用"有开发者表示"/"一位用户分享"/"多人提到"这类自然引用式措辞。
-- 如果原帖只是 meme/玩笑/情绪宣泄没有技术观点，跳过，不强行总结。"""
+- 具体 > 抽象：原帖或评论提到什么场景、什么对比、什么 bug，就说什么；别说"反响热烈"这种空话。
+- 使用"有开发者表示"/"一位用户分享"/"多人提到"/"评论区有人吐槽"这类自然引用式措辞。
+- **优先从一级评论里提炼观点** —— 评论是用户对原帖的真实反应，信息密度比转发类标题高很多。
+- 如果原帖和评论都只是 meme/玩笑/情绪宣泄没有技术观点，跳过，不强行总结。"""
 
 
 def _fetch_posts_for_model(conn, model: str, days: int) -> list[dict]:
@@ -51,7 +52,32 @@ def _fetch_posts_for_model(conn, model: str, days: int) -> list[dict]:
         """,
         (model, cutoff),
     ).fetchall()
-    return [dict(r) for r in rows]
+    posts = [dict(r) for r in rows]
+
+    # 附上每帖 Top 5 一级评论。目的：让 LLM 从"用户真实反馈"提炼观点，而非只看 title+selftext 瞎猜。
+    # 注意 post_id 可能没抓过评论（Phase 3 的门槛 + 预算限制），这种帖 comments=[]，prompt 里降级提示。
+    if posts:
+        ids = [p["post_id"] for p in posts if p.get("post_id")]
+        if ids:
+            placeholders = ",".join("?" for _ in ids)
+            crows = conn.execute(
+                f"""
+                SELECT post_id, author, body, score
+                FROM reddit_comments
+                WHERE post_id IN ({placeholders})
+                ORDER BY post_id, score DESC
+                """,
+                ids,
+            ).fetchall()
+            by_post: dict[str, list[dict]] = {}
+            for r in crows:
+                by_post.setdefault(r["post_id"], []).append(dict(r))
+            for p in posts:
+                p["comments"] = by_post.get(p["post_id"], [])[:5]  # 每帖只带 Top 5
+        else:
+            for p in posts:
+                p["comments"] = []
+    return posts
 
 
 def _top_models_by_posts(conn, days: int, limit: int) -> list[tuple[str, int]]:
@@ -73,10 +99,22 @@ def _top_models_by_posts(conn, days: int, limit: int) -> list[tuple[str, int]]:
 def _format_post_for_prompt(p: dict, i: int) -> str:
     title = (p["title"] or "")[:140]
     body = (p.get("selftext") or "").replace("\n", " ")[:400]
+    comments = p.get("comments") or []
+    if comments:
+        comment_lines = []
+        for j, c in enumerate(comments, 1):
+            cbody = (c.get("body") or "").replace("\n", " ")[:300]
+            cauthor = c.get("author") or "anon"
+            cscore = c.get("score", 0)
+            comment_lines.append(f"     ({j}) u/{cauthor} · +{cscore}: {cbody}")
+        comments_block = "\n   一级评论:\n" + "\n".join(comment_lines)
+    else:
+        comments_block = "\n   (未抓到一级评论)"
     return (
         f"[{i}] r/{p['subreddit']} · score={p['score']} · {p['num_comments']} 评论 · url={p['url']}\n"
         f"   标题: {title}\n"
         f"   正文: {body or '(无正文)'}"
+        f"{comments_block}"
     )
 
 
@@ -84,14 +122,16 @@ def _build_prompt(model: str, posts: list[dict]) -> list[dict]:
     posts_lines = "\n\n".join(_format_post_for_prompt(p, i + 1) for i, p in enumerate(posts))
     user_content = (
         f"{HUMANIZER_PRINCIPLES}\n\n"
-        f"任务：下面是过去 7 天 Reddit 上关于模型『{model}』的相关帖子。\n"
+        f"任务：下面是过去 7 天 Reddit 上关于模型『{model}』的相关帖子（含 Top 5 一级评论）。\n"
         f"请挑出 2-3 条有实质技术观点的用户反馈，每条给我一个 JSON 对象：\n"
-        f'  - "quote": 中文一句话转述（别照抄原英文），以"有开发者表示"/"一位用户分享"/"多人提到"开头，30-80 字\n'
-        f'  - "url":   对应原帖的 url（必须从输入里选一条）\n\n'
+        f'  - "quote":  中文一句话转述（别照抄原英文），以"有开发者表示"/"一位用户分享"/"多人提到"/"评论区有人吐槽"等开头，30-80 字\n'
+        f'  - "url":    对应原帖的 url（必须从输入里选一条）\n'
+        f'  - "source": "post" 或 "comment"，说明观点来自原帖正文还是评论区\n\n'
         f"要求：\n"
-        f"- 如果所有帖子都是 meme / 玩笑 / 无实质观点，返回空数组 []\n"
-        f"- 优先挑 score 高、带正文的帖子\n"
-        f"- 不同观点之间要有差异（别三条都说同一个意思）\n\n"
+        f"- **优先从评论区提炼观点** —— 评论比标题信息密度高，通常是用户的真实使用反馈\n"
+        f"- 如果所有帖子和评论都是 meme / 玩笑 / 无实质观点，返回空数组 []\n"
+        f"- 不同观点之间要有差异（别三条都说同一个意思）\n"
+        f"- quote 中若引用具体评论，用「评论区有人指出」「有用户回复」等措辞，不要带 u/xxx ID\n\n"
         f"--- 帖子（按 score 倒序）---\n"
         f"{posts_lines}\n\n"
         f"直接输出 JSON 数组，不要加代码块、不要加解释。"
@@ -139,8 +179,11 @@ def _opinions_for_model(conn, model: str, days: int) -> dict:
             continue
         q = (it.get("quote") or "").strip()
         u = (it.get("url") or "").strip()
+        src = (it.get("source") or "").strip().lower()
+        if src not in ("post", "comment"):
+            src = ""
         if q and u and u in valid_urls:
-            cleaned.append({"quote": q, "url": u})
+            cleaned.append({"quote": q, "url": u, "source": src or "post"})
 
     return {
         "model":      model,
