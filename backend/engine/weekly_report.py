@@ -17,7 +17,6 @@ v4 结构（2026-04-22 第三轮调整：加 HF 板块 + 重新排序）：
 """
 import json
 import logging
-import re
 from datetime import datetime, timedelta
 from html import escape
 
@@ -26,6 +25,7 @@ from backend.collectors import wechat_rss as wechat_collector
 from backend.db import get_conn, record_status
 from backend.engine import (
     alias_learner,
+    closed_source_classifier,
     hf_digest,
     openrouter_digest,
     leaderboard_digest,
@@ -125,87 +125,6 @@ def _gather_events(period_start_iso: str, limit: int = 20) -> list[dict]:
         logger.info("[Weekly] 冷启动过滤：跳过 %d 条 bootstrap 误报事件（含 new_repo/new_release/new_model_on_board）",
                     bootstrap_skipped)
     return filtered
-
-
-# 闭源模型发布检测：GitHub 监控只覆盖开源仓库，OpenAI/Anthropic/Google/字节/腾讯
-# 这些闭源模型只能从厂商博客 + 中文公众号扫"发布"动词标题。同时命中"模型名关键词"
-# 与"发布动词"才算数，避免把"X 评测了 GPT-5"这种讨论文当成发布。
-_CLOSED_SOURCE_MODEL_RE = re.compile(
-    r"(?:gpt[-\s]?[345](?:\.\d+)?|chatgpt[-\s]?\d?(?:\.\d+)?|"
-    r"claude(?:\s+(?:opus|sonnet|haiku))?[-\s]?\d(?:\.\d+)?|"
-    r"gemini[-\s]?\d(?:\.\d+)?|grok[-\s]?\d(?:\.\d+)?|llama[-\s]?\d(?:\.\d+)?|"
-    r"sora[-\s]?\d|veo[-\s]?\d|imagen[-\s]?\d|nano[-\s]?banana|"
-    r"hunyuan[-\s]?\w?\d?|混元|"
-    r"ernie[-\s]?\d(?:\.\d+)?|文心一言|文心\s*\d|"
-    r"doubao[-\s]?\d|豆包|"
-    r"qwen[-\s]?\d(?:\.\d+)?(?:-(?:vl|coder|max|plus|turbo|omni))?|通义|"
-    r"glm[-\s]?\d(?:\.\d+)?|chatglm[-\s]?\d|智谱\s*清言|"
-    r"step[-\s]?\d|阶跃星辰|"
-    r"minimax[-\s]?\w?\d?|mimo[-\s]?\w?\d?|"
-    r"kimi[-\s]?(?:k\d|\d(?:\.\d+)?)|"
-    r"deepseek[-\s]?(?:v|r)\d(?:\.\d+)?|"
-    r"yi[-\s]?\d(?:\.\d+)?|baichuan[-\s]?\d|"
-    r"seedance|seedream|kling[-\s]?\d|可灵|"
-    r"pixverse[-\s]?v?\d)",
-    re.IGNORECASE,
-)
-_RELEASE_VERB_RE = re.compile(
-    r"(?:\bintroduc(?:ing|e|es|ed)\b|\bannounc(?:ing|e|es|ed)\b|"
-    r"\blaunch(?:ing|es|ed)?\b|\bunveil(?:s|ing|ed)?\b|\bdebut(?:s|ing|ed)?\b|"
-    r"\bnow\s+(?:available|live|here|open)\b|\bavailable\s+(?:now|today)\b|"
-    r"\brelease\s+of\b|\breleas(?:ing|ed)\b|\bmeet\s+\w+|\bsay\s+hello\b|"
-    r"发布|推出|上线|登场|首发|正式发布|亮相|开放(?:使用|试用|内测)?|今日上线|开源)",
-    re.IGNORECASE,
-)
-
-
-def _gather_closed_source_releases(period_start_iso: str, limit: int = 20) -> list[dict]:
-    """从 blog_posts（厂商官方博客 + 微信公众号）扫近 days 天的"模型发布"标题。
-
-    用途：补全周报 §I "新模型" 行 — GitHub 仅覆盖中国头部 7 个开源 org，
-    OpenAI/Anthropic/Google/字节豆包/腾讯混元 这些闭源模型只能靠博客标题信号。
-
-    匹配规则：title 同时命中 _CLOSED_SOURCE_MODEL_RE（具体模型版本号）+
-              _RELEASE_VERB_RE（发布动词）。两条都要中，避免讨论文混入。
-
-    去重：(source, model_keyword 小写) 同组合只取最新一条；按发布时间倒序。
-    """
-    with get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT source, title, url, published_at
-            FROM blog_posts
-            WHERE published_at >= ?
-              AND title IS NOT NULL AND title != ''
-            ORDER BY published_at DESC
-            """,
-            (period_start_iso,),
-        ).fetchall()
-
-    seen: set[tuple[str, str]] = set()
-    out: list[dict] = []
-    for r in rows:
-        title = (r["title"] or "").strip()
-        m_model = _CLOSED_SOURCE_MODEL_RE.search(title)
-        if not m_model:
-            continue
-        if not _RELEASE_VERB_RE.search(title):
-            continue
-        model_kw = m_model.group(0).strip().lower()
-        key = (r["source"] or "", model_kw)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append({
-            "source": r["source"],
-            "title": title,
-            "url": r["url"],
-            "model": m_model.group(0).strip(),
-            "published_at": r["published_at"],
-        })
-        if len(out) >= limit:
-            break
-    return out
 
 
 def _gather_source_stats(period_start_iso: str, events: list[dict] | None = None) -> dict:
@@ -878,7 +797,7 @@ def generate(days: int = 7) -> dict:
     week = _iso_week(now)
 
     events            = _safe_call("events",       _gather_events, period_start_iso) or []
-    closed_releases   = _safe_call("closed_releases", _gather_closed_source_releases, period_start_iso) or []
+    closed_releases   = _safe_call("closed_releases", closed_source_classifier.generate, days=days) or []
     stats             = _safe_call("stats",        _gather_source_stats, period_start_iso, events) or {"leaderboard_rows": 0, "new_releases": 0, "total_events": 0}
     leaderboards      = _safe_call("leaderboards", leaderboard_digest.generate, days=days) or {}
     hf                = _safe_call("hf",           hf_digest.generate, days=days) or {"top": [], "as_of": None, "any_baseline": False}

@@ -22,8 +22,13 @@ from backend.utils import config
 logger = logging.getLogger(__name__)
 
 API_URL = "https://api.deepseek.com/chat/completions"
-DEFAULT_MODEL = "deepseek-chat"          # 通用对话
-JSON_MODEL = "deepseek-chat"             # DeepSeek 的 JSON mode 这个模型就够
+# 2026-04-25 切换：deepseek-chat / deepseek-reasoner 将在 2026-07-24 弃用
+# （官方公告：https://api-docs.deepseek.com）。统一升级到 V4 系列：
+#   deepseek-v4-flash  — 大上下文 + 低延迟，覆盖周报全部 batch 分类/摘要任务
+#   deepseek-v4-pro    — 推理更强但更贵，目前未用；如某块 LLM 输出质量降级再切换
+# 上下文窗口达到百万级（适合 closed_source_classifier 一次塞 ≤200 条标题 + 摘要）。
+DEFAULT_MODEL = "deepseek-v4-flash"
+JSON_MODEL = "deepseek-v4-flash"
 
 # 超时策略：连接 10s，读 90s（LLM 输出长文要等）
 CONNECT_TIMEOUT = 10
