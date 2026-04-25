@@ -10,8 +10,11 @@
 """
 import logging
 import threading
+import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 
+from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_MISSED
 from apscheduler.executors.pool import ThreadPoolExecutor
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -37,12 +40,18 @@ logger = logging.getLogger("modelradar")
 
 def _safe(fn, name: str):
     def wrapped():
+        t0 = time.monotonic()
         try:
             logger.info("▶ %s", name)
             fn()
-            logger.info("✔ %s", name)
+            elapsed = time.monotonic() - t0
+            logger.info("✔ %s elapsed=%.1fs", name, elapsed)
+            if elapsed > 60:
+                logger.warning("⏱ slow job=%s elapsed=%.1fs（>60s 阻塞了串行执行器）",
+                               name, elapsed)
         except Exception as e:
-            logger.exception("✘ %s 异常: %s", name, e)
+            elapsed = time.monotonic() - t0
+            logger.exception("✘ %s 异常 elapsed=%.1fs: %s", name, elapsed, e)
     wrapped.__name__ = f"safe_{name}"
     return wrapped
 
@@ -108,51 +117,76 @@ def _cold_start():
 
 # 单线程执行器：所有 job 串行跑，避免 SQLite 写锁冲突（WAL 只允许一个写者）。
 # 之前多个 job 同 tick 撞车导致 mini_digest / github 偶发 "database is locked"。
+#
+# job_defaults:
+#   misfire_grace_time=600 — APScheduler 默认是 1 秒。在串行执行器下，前一个 job
+#       跑 25 秒（github）就足以把后面所有 tick 静默丢弃。改成 10 分钟容忍，
+#       让 coalesce 能真正接住错过的 tick。
+#       根因记录：2026-04-25 看到 7 个 job WARN "missed by 25s" → 全部 drop →
+#       6h/12h job 整天没跑（diff_engine/blog/hf/heat/reddit/mini_digest）。
+#   coalesce=True / max_instances=1 — 仍每个 job 单独显式设了，这里给个保险。
 scheduler = BackgroundScheduler(
     timezone="Asia/Shanghai",
     executors={"default": ThreadPoolExecutor(max_workers=1)},
+    job_defaults={
+        "misfire_grace_time": 600,
+        "coalesce": True,
+        "max_instances": 1,
+    },
 )
 
 
+def _on_job_event(event):
+    """把 APScheduler 的 job 生命周期事件抬到应用层日志。
+
+    EVENT_JOB_MISSED 默认只在 apscheduler.scheduler logger 打 WARN，容易淹没在
+    Railway log 里。这里强制打 ERROR + 标注实际偏差秒数，让以后再丢 fire 一眼能看见。
+    """
+    if event.code == EVENT_JOB_MISSED:
+        delay = (datetime.now(event.scheduled_run_time.tzinfo)
+                 - event.scheduled_run_time).total_seconds()
+        logger.error("⚠ MISSED job=%s scheduled=%s delay=%.1fs（被丢弃）",
+                     event.job_id, event.scheduled_run_time, delay)
+    elif event.code == EVENT_JOB_ERROR:
+        logger.error("✘ ERROR job=%s exception=%s",
+                     event.job_id, event.exception)
+
+
 def _register_jobs():
-    scheduler.add_job(_safe(_run_leaderboard, "leaderboard"),
-                      IntervalTrigger(minutes=config.INTERVAL_LEADERBOARD_MIN),
-                      id="leaderboard", max_instances=1, coalesce=True)
-    scheduler.add_job(_safe(_run_github, "github"),
-                      IntervalTrigger(minutes=config.INTERVAL_GITHUB_MIN),
-                      id="github", max_instances=1, coalesce=True)
-    scheduler.add_job(_safe(_run_diff, "diff"),
-                      IntervalTrigger(minutes=config.INTERVAL_DIFF_MIN),
-                      id="diff", max_instances=1, coalesce=True)
-    scheduler.add_job(_safe(_run_alerts, "p0_alert"),
-                      IntervalTrigger(minutes=config.INTERVAL_P0_ALERT_MIN),
-                      id="p0_alert", max_instances=1, coalesce=True)
-    scheduler.add_job(_safe(_run_heat, "heat"),
-                      IntervalTrigger(minutes=config.INTERVAL_HEAT_MIN),
-                      id="heat", max_instances=1, coalesce=True)
-    scheduler.add_job(_safe(_run_reddit, "reddit"),
-                      IntervalTrigger(minutes=config.INTERVAL_REDDIT_MIN),
-                      id="reddit", max_instances=1, coalesce=True)
-    scheduler.add_job(_safe(_run_hf, "huggingface"),
-                      IntervalTrigger(minutes=config.INTERVAL_HF_MIN),
-                      id="huggingface", max_instances=1, coalesce=True)
-    scheduler.add_job(_safe(_run_blog, "blog_rss"),
-                      IntervalTrigger(minutes=config.INTERVAL_BLOG_MIN),
-                      id="blog_rss", max_instances=1, coalesce=True)
-    scheduler.add_job(_safe(_run_openrouter, "openrouter"),
-                      IntervalTrigger(minutes=config.INTERVAL_OPENROUTER_MIN),
-                      id="openrouter", max_instances=1, coalesce=True)
-    scheduler.add_job(_safe(_run_wechat, "wechat_rss"),
-                      IntervalTrigger(minutes=config.INTERVAL_WECHAT_MIN),
-                      id="wechat_rss", max_instances=1, coalesce=True)
-    scheduler.add_job(_safe(_run_mini_digest, "mini_digest"),
-                      IntervalTrigger(minutes=config.INTERVAL_MINI_DIGEST_MIN),
-                      id="mini_digest", max_instances=1, coalesce=True)
+    # 错峰首次运行：APScheduler IntervalTrigger 不传 start_date 时，所有 job 的
+    # 起算点都是注册当下（同一秒），导致每过 6/12h 一批 job 同时到期。串行执行器下
+    # 后到的 job tick 会被压住直到前面跑完，超过 misfire_grace_time 就被丢弃。
+    # 这里给每个 job 加 30s 递增偏移，让首次运行时间错开 → 后续每个 interval
+    # 周期天然保持错峰。
+    now = datetime.now(scheduler.timezone)
+    def first_run(offset_s: int) -> datetime:
+        return now + timedelta(seconds=offset_s)
+
+    specs = [
+        ("leaderboard", _run_leaderboard, config.INTERVAL_LEADERBOARD_MIN, 30),
+        ("github",      _run_github,      config.INTERVAL_GITHUB_MIN,      60),
+        ("diff",        _run_diff,        config.INTERVAL_DIFF_MIN,        90),
+        ("p0_alert",    _run_alerts,      config.INTERVAL_P0_ALERT_MIN,    120),
+        ("heat",        _run_heat,        config.INTERVAL_HEAT_MIN,        150),
+        ("reddit",      _run_reddit,      config.INTERVAL_REDDIT_MIN,      180),
+        ("huggingface", _run_hf,          config.INTERVAL_HF_MIN,          210),
+        ("blog_rss",    _run_blog,        config.INTERVAL_BLOG_MIN,        240),
+        ("openrouter",  _run_openrouter,  config.INTERVAL_OPENROUTER_MIN,  270),
+        ("wechat_rss",  _run_wechat,      config.INTERVAL_WECHAT_MIN,      300),
+        ("mini_digest", _run_mini_digest, config.INTERVAL_MINI_DIGEST_MIN, 330),
+    ]
+    for job_id, fn, interval_min, offset_s in specs:
+        scheduler.add_job(
+            _safe(fn, job_id),
+            IntervalTrigger(minutes=interval_min),
+            id=job_id,
+            next_run_time=first_run(offset_s),
+        )
     # 周五 19:00 Asia/Shanghai 发周报
     scheduler.add_job(_safe(_run_weekly, "weekly_report"),
                       CronTrigger(day_of_week="fri", hour=19, minute=0,
                                   timezone="Asia/Shanghai"),
-                      id="weekly_report", max_instances=1, coalesce=True)
+                      id="weekly_report")
 
 
 @asynccontextmanager
@@ -172,6 +206,7 @@ async def lifespan(app: FastAPI):
         logger.info("COLD_START_ON_BOOT=false，跳过冷启动")
 
     _register_jobs()
+    scheduler.add_listener(_on_job_event, EVENT_JOB_MISSED | EVENT_JOB_ERROR)
     scheduler.start()
     logger.info(
         "调度器启动 · leaderboard=%dmin github=%dmin diff=%dmin p0=%dmin heat=%dmin "
