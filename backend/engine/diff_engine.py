@@ -222,7 +222,11 @@ def _diff_github_new_repos(conn) -> int:
                          severity="P0",
                          source="github",
                          title=title,
-                         detail={"org": r["org"], "repo": r["repo_name"]},
+                         detail={
+                             "org": r["org"],
+                             "repo": r["repo_name"],
+                             "html_url": f"https://github.com/{r['org']}/{r['repo_name']}",
+                         },
                          model_name=r["repo_name"],
                          dedupe_key=key):
             new_events += 1
@@ -265,7 +269,8 @@ def _diff_github_star_surge(conn) -> int:
                          source="github",
                          title=title,
                          detail={"org": r["org"], "repo": r["repo_name"],
-                                 "delta_24h": r["delta"], "current": r["cur_stars"]},
+                                 "delta_24h": r["delta"], "current": r["cur_stars"],
+                                 "html_url": f"https://github.com/{r['org']}/{r['repo_name']}"},
                          model_name=r["repo_name"],
                          dedupe_key=key):
             new_events += 1
