@@ -20,6 +20,7 @@ ORGS = [
     "MiniMax-AI",
     "stepfun-ai",
     "QwenLM",
+    "XiaomiMiMo",
 ]
 
 GITHUB_API = "https://api.github.com"
