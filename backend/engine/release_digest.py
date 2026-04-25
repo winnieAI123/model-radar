@@ -24,6 +24,40 @@ logger = logging.getLogger(__name__)
 _NOISE_WORDS = re.compile(r"(nightly|\brc\d*\b|\balpha\d*\b|\bbeta\d*\b|preview)", re.IGNORECASE)
 
 
+# 末尾 token 命中 → 工具：尾锚定避免误伤"以工具词开头"的真模型（code-llama, agent-tuning）。
+# `-code$` 故意保留：qwen-code 这种命名是 Qwen 团队的 IDE agent 工具，不是模型；
+#   而 Qwen2.5-Coder（真模型）以 -coder 结尾，不会被这条规则误命中。
+_TOOL_TAIL = re.compile(
+    r"-(?:cli|sdk|toolkit|cookbook|playground|client|wrapper|examples?|demo|code)$|"
+    r"^(?:cookbook|examples?|demo|playground)$",
+    re.IGNORECASE,
+)
+# 框架 / 推理 kernel / 算子库关键词（不锚定，因为可以出现在任何位置）。
+# 例：DeepGEMM, FlashAttention, FlashInfer, vLLM, CUTLASS, Triton-distributed
+_FRAMEWORK_KEYS = re.compile(
+    r"(?:gemm|flash[-_]?att(?:n|ention)|flashinfer|^triton[-_]|xformers|vllm|cutlass|"
+    r"-kernel(?:s)?$|deepep|tensorrt)",
+    re.IGNORECASE,
+)
+
+
+def _pre_classify_kind(repo_name: str) -> str | None:
+    """基于 repo 名的硬规则预分类。命中则覆盖 LLM 判定。
+
+    保守设计：尾锚定 `-X$` + 框架专有名词（gemm/cutlass/vllm 等）。目的是抓 LLM 偶发
+    把 DeepGEMM 判成 model、kimi-cli 判成 model 这种系统性误判，而不是替代 LLM。
+    返回 None = 让 LLM 决定。
+    """
+    if not repo_name:
+        return None
+    name = repo_name.strip()
+    if _TOOL_TAIL.search(name):
+        return "tool"
+    if _FRAMEWORK_KEYS.search(name):
+        return "framework"
+    return None
+
+
 HUMANIZER_PRINCIPLES = """写作原则：
 - 陈述事实，不做营销渲染。禁用："展现了卓越能力"/"充分体现了"/"令人瞩目"/"里程碑式"/"革命性"/"引领行业潮流"。
 - 短句优先。能一句说完不分两句。
@@ -208,6 +242,13 @@ def _merge(releases: list[dict], llm_items: list[dict]) -> list[dict]:
         kind = (llm.get("kind") or "other").strip().lower()
         if kind not in {"model", "tool", "framework", "eval", "other"}:
             kind = "other"
+        # 硬规则覆盖：repo 名命中 -cli/-code/gemm 等模式时强制 tool/framework，
+        # 避免 LLM 偶发把 DeepGEMM/kimi-cli/qwen-code 判成 model 流入 §I"新模型 N 款"。
+        forced = _pre_classify_kind(r["repo_name"])
+        if forced and forced != kind:
+            logger.info("[Release] 硬规则覆盖 %s/%s: kind=%s → %s",
+                        r["org"], r["repo_name"], kind, forced)
+            kind = forced
         out.append({
             **r,
             "kind":      kind,

@@ -1,13 +1,15 @@
 """社区声音显示层 · 家族聚合。
 
-只在 Dashboard 的"社区声音" panel 用：把 Qwen3 / Qwen3-Coder / Qwen3-VL 等
-同家族 canonical 合成一张卡，卡里的每条观点引用自然会标具体版本号。
+只在 Dashboard 的"社区声音" panel 和周报 §I Reddit 行用：把 Qwen3 / Qwen3-Coder /
+Qwen3-VL 等同家族 canonical 合成一张卡，卡里的每条观点引用自然会标具体版本号。
 
-严格约束：不动 canonical 粒度。榜单、热度、周报正文、diff_engine 全部继续按
-canonical 工作。只有 digest_cache 的写入（mini_digest + weekly_report 双写）
-先过一次 rollup，让 Dashboard 看到 family 维度。
+严格约束：不动 canonical 粒度。榜单、热度、diff_engine 全部继续按 canonical 工作。
+只有 digest_cache 的写入（mini_digest + weekly_report 双写）和周报 §I 概览行
+先过一次 rollup，让概览维度看到 family。
 """
 from __future__ import annotations
+
+from backend.utils.model_alias import normalize as _normalize_alias
 
 # canonical → family 标签。没在表里的 canonical 保持原样（单成员 family）。
 MODEL_FAMILY: dict[str, str] = {
@@ -57,10 +59,23 @@ MODEL_FAMILY: dict[str, str] = {
 
 
 def get_family(canonical: str) -> str:
-    """canonical → family 标签。没映射的返回原样（作为单成员 family）。"""
+    """canonical → family 标签。没映射的返回原样（作为单成员 family）。
+
+    自愈：如果传入的 raw 是别名（如 reddit_posts.matched_model 里残留的 "qwen3.6"
+    或 "qwen-code" 这种 alias_table 后加进去的旧名），先过一遍 normalize() 拿到
+    真 canonical，再查 family。这样旧数据不需要 backfill 也能正确归并。
+    """
     if not canonical:
         return canonical
-    return MODEL_FAMILY.get(canonical, canonical)
+    # 第一次直接查 — 多数情况已经是 canonical（"Qwen3", "Claude Opus 4.7"）
+    if canonical in MODEL_FAMILY:
+        return MODEL_FAMILY[canonical]
+    # 兜底：可能是 alias，归一化再查
+    norm = _normalize_alias(canonical)
+    if norm and norm in MODEL_FAMILY:
+        return MODEL_FAMILY[norm]
+    # 仍找不到：保持原样，作为单成员 family
+    return norm or canonical
 
 
 def rollup_opinions(payload: dict, opinions_per_card: int = 4) -> dict:

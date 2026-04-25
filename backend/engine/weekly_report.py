@@ -227,11 +227,14 @@ def _render_html(data: dict) -> str:
     #   而且可以视觉上列表化扫读，不再需要拼成连贯段落。
     rows: list[tuple[str, str]] = []  # (label, body)
 
-    # § II · Releases
+    # § II · Releases — 只数 kind="model" 的，避免把 DeepGEMM(framework)/kimi-cli(tool)/
+    # qwen-code(tool) 这类工具/框架算成"新模型"。release_digest 已经按 kind 排序，
+    # model 排最前面，但 §I 概览必须按"模型"严格过滤；tool/framework 在 §II 全表中仍会展示。
     rel_items = data["releases"].get("items") or []
-    if rel_items:
-        names = "、".join(f"{r['org']}/{r['repo_name']}" for r in rel_items[:3])
-        rows.append(("发布", f"新模型 {len(rel_items)} 款 — {names}"))
+    model_items = [r for r in rel_items if r.get("kind") == "model"]
+    if model_items:
+        names = "、".join(f"{r['org']}/{r['repo_name']}" for r in model_items[:3])
+        rows.append(("发布", f"新模型 {len(model_items)} 款 — {names}"))
 
     # § III · Leaderboards
     lb_first_sum = next((v.get("summary_md") for v in data["leaderboards"].values() if v.get("summary_md")), None)
@@ -274,8 +277,12 @@ def _render_html(data: dict) -> str:
                     or_brief = or_brief + "。" + nxt
         rows.append(("OpenRouter", or_brief[:140]))
 
-    # § VI · 社区声音
-    op_models = data["opinions"].get("models") or []
+    # § VI · 社区声音 — 先过 family rollup 再取 Top 3：避免 qwen3.6 / Qwen3 / qwen-code
+    # 三个 canonical 同时挂"讨论集中在"那一行（实际都属于 Qwen 家族）。rollup 内部会
+    # 二次 normalize 兜底历史 reddit_posts.matched_model 里的旧别名。
+    from backend.utils.model_family import rollup_opinions as _rollup
+    op_rolled = _rollup(data["opinions"])
+    op_models = op_rolled.get("models") or []
     if op_models:
         top_names = "、".join(m.get("model") or "" for m in op_models[:3])
         rows.append(("Reddit", f"讨论集中在 {top_names}"))
