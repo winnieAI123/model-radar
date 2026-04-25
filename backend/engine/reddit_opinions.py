@@ -164,10 +164,12 @@ def _opinions_for_model(conn, model: str, days: int) -> dict:
     if not posts:
         return {"model": model, "post_count": 0, "opinions": [], "used_llm": False}
 
+    # max_tokens 给到 2048：deepseek-v4-flash 是推理模型，会先吐 reasoning_content 再吐 content，
+    # 两者共享 max_tokens 预算。原值 600 不够 reasoning 用，content 直接空字符串导致全部模型 0 观点。
     raw = llm_client.chat(
         _build_prompt(model, posts),
         temperature=0.4,
-        max_tokens=600,
+        max_tokens=2048,
     )
     items = _parse_json_array(raw)
 
