@@ -12,7 +12,7 @@ import logging
 import threading
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_MISSED
 from apscheduler.executors.pool import ThreadPoolExecutor
@@ -153,34 +153,31 @@ def _on_job_event(event):
 
 
 def _register_jobs():
-    # 错峰首次运行：APScheduler IntervalTrigger 不传 start_date 时，所有 job 的
-    # 起算点都是注册当下（同一秒），导致每过 6/12h 一批 job 同时到期。串行执行器下
-    # 后到的 job tick 会被压住直到前面跑完，超过 misfire_grace_time 就被丢弃。
-    # 这里给每个 job 加 30s 递增偏移，让首次运行时间错开 → 后续每个 interval
-    # 周期天然保持错峰。
-    now = datetime.now(scheduler.timezone)
-    def first_run(offset_s: int) -> datetime:
-        return now + timedelta(seconds=offset_s)
-
+    # 默认 IntervalTrigger 行为：第一次 fire 在"注册时刻 + interval"。这样冷启动
+    # daemon thread 跑完所有 collector 后（~5-10min），scheduler 的 ✕6h/12h job 还没
+    # 到首次触发，不会和冷启动并发写库（之前实测 scheduler 和冷启动同时跑 github
+    # → SQLite WAL "database is locked"，挂 60s）。
+    #
+    # 不再做错峰首次运行：misfire_grace_time=600 + coalesce=True + max_workers=1
+    # 已经能在多个 job 同 tick 到期时安全排队跑（apscheduler 内部 dispatch 队列）。
     specs = [
-        ("leaderboard", _run_leaderboard, config.INTERVAL_LEADERBOARD_MIN, 30),
-        ("github",      _run_github,      config.INTERVAL_GITHUB_MIN,      60),
-        ("diff",        _run_diff,        config.INTERVAL_DIFF_MIN,        90),
-        ("p0_alert",    _run_alerts,      config.INTERVAL_P0_ALERT_MIN,    120),
-        ("heat",        _run_heat,        config.INTERVAL_HEAT_MIN,        150),
-        ("reddit",      _run_reddit,      config.INTERVAL_REDDIT_MIN,      180),
-        ("huggingface", _run_hf,          config.INTERVAL_HF_MIN,          210),
-        ("blog_rss",    _run_blog,        config.INTERVAL_BLOG_MIN,        240),
-        ("openrouter",  _run_openrouter,  config.INTERVAL_OPENROUTER_MIN,  270),
-        ("wechat_rss",  _run_wechat,      config.INTERVAL_WECHAT_MIN,      300),
-        ("mini_digest", _run_mini_digest, config.INTERVAL_MINI_DIGEST_MIN, 330),
+        ("leaderboard", _run_leaderboard, config.INTERVAL_LEADERBOARD_MIN),
+        ("github",      _run_github,      config.INTERVAL_GITHUB_MIN),
+        ("diff",        _run_diff,        config.INTERVAL_DIFF_MIN),
+        ("p0_alert",    _run_alerts,      config.INTERVAL_P0_ALERT_MIN),
+        ("heat",        _run_heat,        config.INTERVAL_HEAT_MIN),
+        ("reddit",      _run_reddit,      config.INTERVAL_REDDIT_MIN),
+        ("huggingface", _run_hf,          config.INTERVAL_HF_MIN),
+        ("blog_rss",    _run_blog,        config.INTERVAL_BLOG_MIN),
+        ("openrouter",  _run_openrouter,  config.INTERVAL_OPENROUTER_MIN),
+        ("wechat_rss",  _run_wechat,      config.INTERVAL_WECHAT_MIN),
+        ("mini_digest", _run_mini_digest, config.INTERVAL_MINI_DIGEST_MIN),
     ]
-    for job_id, fn, interval_min, offset_s in specs:
+    for job_id, fn, interval_min in specs:
         scheduler.add_job(
             _safe(fn, job_id),
             IntervalTrigger(minutes=interval_min),
             id=job_id,
-            next_run_time=first_run(offset_s),
         )
     # 周五 19:00 Asia/Shanghai 发周报
     scheduler.add_job(_safe(_run_weekly, "weekly_report"),
