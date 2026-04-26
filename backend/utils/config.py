@@ -61,7 +61,7 @@ DAJIALA_ACCOUNTS = _get("DAJIALA_ACCOUNTS", "赛博禅心,数字生命卡兹克"
 # Twitter（X）— 通过 twitterapi.io 第三方代理 API 抓闭源大佬推文。
 # 主目标：李飞飞 World Labs 世界模型这类公众号 / GitHub 都拿不到的早期信号。
 TWITTER_API_KEY = _get("TWITTER_API_KEY")
-TWITTER_HANDLES = _get("TWITTER_HANDLES", "drfeifei")
+TWITTER_HANDLES = _get("TWITTER_HANDLES", "drfeifei,theworldlabs")
 TWITTER_PROXY = _get("TWITTER_PROXY", "")   # Railway 美国直连留空；本地调试可填 http://127.0.0.1:7890
 INTERVAL_TWITTER_MIN = _get_int("INTERVAL_TWITTER_MIN", 2880)  # 2 天 1 次（diff_engine 48h 窗口刚好覆盖）
 
