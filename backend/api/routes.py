@@ -159,6 +159,8 @@ _COLLECTOR_INTERVALS = {
     "blog_rss":             "INTERVAL_BLOG_MIN",
     "openrouter":           "INTERVAL_OPENROUTER_MIN",
     "wechat_rss":           "INTERVAL_WECHAT_MIN",
+    "wechat_dajiala":       "INTERVAL_DAJIALA_MIN",
+    "twitter_feifei":       "INTERVAL_TWITTER_MIN",
     "mini_digest_opinions": "INTERVAL_MINI_DIGEST_MIN",
     "mini_digest_themes":   "INTERVAL_MINI_DIGEST_MIN",
 }
