@@ -116,7 +116,10 @@ def generate(days: int = 7, top_posts: int = 30) -> dict:
         return {"themes": [], "post_count": 0, "used_llm": False,
                 "fallback_md": "本周 Reddit 帖子过少，无法归纳热议主题。"}
 
-    raw = llm_client.chat(_build_prompt(posts), temperature=0.4, max_tokens=1200)
+    # max_tokens=4096：deepseek-v4-flash 是推理模型，reasoning_content + content 共享预算。
+    # themes 输入 30 个帖子（~3-5K tokens），原值 1200 全被 reasoning 吃掉，content 截断→JSON
+    # 解析失败→themes=[]→Dashboard §VI 显示空。同根因见 reddit_opinions.py 的 600→2048 修复。
+    raw = llm_client.chat(_build_prompt(posts), temperature=0.4, max_tokens=4096)
     items = _parse_json(raw)
 
     # 后处理：把 post_ids 映射回帖子实体；过滤格式不对的
