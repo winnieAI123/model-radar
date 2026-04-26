@@ -30,6 +30,7 @@ from backend.collectors import huggingface as hf_collector
 from backend.collectors import blog_rss as blog_collector
 from backend.collectors import openrouter as openrouter_collector
 from backend.collectors import wechat_rss as wechat_collector
+from backend.collectors import wechat_dajiala
 from backend.db import get_conn
 from backend.engine import alert_manager, diff_engine, heat_scorer, weekly_report, mini_digest
 from backend.utils import config
@@ -74,6 +75,7 @@ def _run_hf():     hf_collector.collect()
 def _run_blog():   blog_collector.collect()
 def _run_openrouter(): openrouter_collector.collect()
 def _run_wechat(): wechat_collector.collect()
+def _run_dajiala(): wechat_dajiala.collect()
 def _run_mini_digest(): mini_digest.run_all()
 def _run_weekly():
     # 发周报前必须刷一次"发布消息"类数据源（github release / 厂商博客 / 公众号），
@@ -82,7 +84,8 @@ def _run_weekly():
     # 过慢会把周报生成拖到 5-10 分钟以上。实测单次刷新约 1-2 分钟。
     # （2026-04-24 问题：19:00 周报没写 DeepSeek V4 发布 → 原因：_run_weekly 不刷数据）
     for name, fn in [("github", _run_github), ("blog_rss", _run_blog),
-                     ("wechat_rss", _run_wechat)]:
+                     ("wechat_rss", _run_wechat),
+                     ("wechat_dajiala", _run_dajiala)]:
         try:
             fn()
         except Exception:
@@ -104,6 +107,7 @@ def _cold_start():
     _safe(_run_blog, "blog_rss")()
     _safe(_run_openrouter, "openrouter")()
     _safe(_run_wechat, "wechat_rss")()
+    _safe(_run_dajiala, "wechat_dajiala")()
     # reddit 必须加入冷启动：interval=360min，每次 redeploy 会把 APScheduler 计时器归零，
     # 没有冷启动触发的话，频繁部署期评论表会长期空置，社区声音总结退化到只啃标题。
     _safe(_run_reddit, "reddit")()
@@ -171,6 +175,7 @@ def _register_jobs():
         ("blog_rss",    _run_blog,        config.INTERVAL_BLOG_MIN),
         ("openrouter",  _run_openrouter,  config.INTERVAL_OPENROUTER_MIN),
         ("wechat_rss",  _run_wechat,      config.INTERVAL_WECHAT_MIN),
+        ("wechat_dajiala", _run_dajiala,  config.INTERVAL_DAJIALA_MIN),
         ("mini_digest", _run_mini_digest, config.INTERVAL_MINI_DIGEST_MIN),
     ]
     for job_id, fn, interval_min in specs:
