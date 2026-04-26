@@ -212,7 +212,9 @@ function renderAlertBar(alerts, { isRefresh = true } = {}) {
     : recent.map((e) => {
         const { modality, openness } = classifyAlert(e);
         const link = e.detail?.url || e.detail?.html_url;
-        const linkHtml = link ? ` <a href="${esc(link)}" target="_blank" rel="noopener">🔗</a>` : "";
+        const titleHtml = link
+          ? `<a href="${esc(link)}" target="_blank" rel="noopener">${esc(e.title)}</a>`
+          : esc(e.title);
         const modChip = `<span class="tag-chip tag-mod-${modality}">${modality === 'multimodal' ? '多模态' : '文本'}</span>`;
         const openChip = openness ? `<span class="tag-chip tag-open-${openness}">${openness === 'open' ? '开源' : '闭源'}</span>` : "";
         const b = EVENT_BADGE[e.event_type] || { label: e.event_type, cls: "ev-default" };
@@ -222,7 +224,7 @@ function renderAlertBar(alerts, { isRefresh = true } = {}) {
           <div class="alert-item${highlight}" data-id="${e.id}">
             ${evChip}
             <div>
-              <div class="alert-title">${esc(e.title)}${linkHtml}</div>
+              <div class="alert-title">${titleHtml}</div>
               <div class="alert-tags">${modChip}${openChip}</div>
               <div class="meta-line">${esc(e.source)} · ${relTime(e.created_at)}</div>
             </div>
