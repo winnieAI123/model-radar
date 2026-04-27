@@ -6,6 +6,7 @@ const state = {
   lbTab: "llm",                       // llm | t2i | t2v | i2v
   lbSource: 0,                        // 当前 tab 下的 source 索引
   lbData: null,                       // 缓存最近一次 dashboard.leaderboards
+  lbFilter: { openness: "all" },      // 模型榜的开/闭源过滤
   alertFilter: { modality: "all", openness: "all" },  // 关键信号 panel 过滤器
   alertData: null,                    // 缓存最近一次 dashboard.alerts 用于客户端过滤
   prevAlertIds: null,                 // 上一次渲染的事件 id 集合；用于算"新增"条数
@@ -316,8 +317,18 @@ function renderLbPanel(d) {
   }).join("");
   const chipsHtml = `<div class="lb-source-row">${chips}</div>`;
 
+  // 开/闭源 filter 行：复用 alert-filter-row 样式
+  const f = state.lbFilter;
+  const filterHtml = `
+    <div class="alert-filter-row lb-filter-row">
+      <span class="filter-label">开源</span>
+      <button class="filter-chip ${f.openness === 'all' ? 'active' : ''}" data-lbf="openness" data-v="all">全部</button>
+      <button class="filter-chip ${f.openness === 'open' ? 'active' : ''}" data-lbf="openness" data-v="open">开源</button>
+      <button class="filter-chip ${f.openness === 'closed' ? 'active' : ''}" data-lbf="openness" data-v="closed">闭源</button>
+    </div>`;
+
   if (!src.items?.length) {
-    holder.innerHTML = chipsHtml + `<div class="empty">该平台暂无数据</div>`;
+    holder.innerHTML = chipsHtml + filterHtml + `<div class="empty">该平台暂无数据</div>`;
   } else {
     // 仅 lmarena + LLM 榜单在第三列展示价格（OR 官方 extra_json.price_per_1m_tokens，形如 "$5/$25"）
     const showPrice = src.source === "lmarena" && state.lbTab === "llm";
@@ -329,23 +340,32 @@ function renderLbPanel(d) {
         <span class="score">${col3Label}</span>
         <span class="delta">Δ</span>
       </div>`;
-    const rows = src.items.map((r) => {
-      // lmarena 的 score 形如 "1504±9"（字符串），aa/superclue 是数字；都透传为字串展示
-      const scoreRaw = r.score;
-      const scoreText = scoreRaw == null ? "—"
-        : (typeof scoreRaw === "number" ? scoreRaw.toFixed(0) : String(scoreRaw));
-      const col3 = showPrice
-        ? (r.price_per_1m_tokens ? esc(r.price_per_1m_tokens) : "—")
-        : esc(scoreText);
-      return `
-      <div class="lb-row">
-        <span class="rank">#${r.rank}</span>
-        <span class="name" title="${esc(r.model_name)}">${esc(r.model_name)}</span>
-        <span class="score">${col3}</span>
-        ${deltaSpan(r.delta)}
-      </div>`;
-    }).join("");
-    holder.innerHTML = chipsHtml + headerHtml + rows;
+    // 开/闭源过滤：'all' 不过滤；'open'/'closed' 时 unknown 模型一并隐藏（避免误归类）
+    const filtered = src.items.filter((r) => {
+      if (state.lbFilter.openness === "all") return true;
+      return opennessByName(r.model_name) === state.lbFilter.openness;
+    });
+    const rowsHtml = filtered.length === 0
+      ? `<div class="empty" style="padding:18px">当前过滤下无匹配项</div>`
+      : filtered.map((r) => {
+          // lmarena 的 score 形如 "1504±9"（字符串），aa/superclue 是数字；都透传为字串展示
+          const scoreRaw = r.score;
+          const scoreText = scoreRaw == null ? "—"
+            : (typeof scoreRaw === "number" ? scoreRaw.toFixed(0) : String(scoreRaw));
+          const col3 = showPrice
+            ? (r.price_per_1m_tokens ? esc(r.price_per_1m_tokens) : "—")
+            : esc(scoreText);
+          const op = opennessByName(r.model_name);
+          const opChip = op ? `<span class="tag-chip tag-open-${op}" style="margin-left:6px">${op === 'open' ? '开' : '闭'}</span>` : "";
+          return `
+          <div class="lb-row">
+            <span class="rank">#${r.rank}</span>
+            <span class="name" title="${esc(r.model_name)}">${esc(r.model_name)}${opChip}</span>
+            <span class="score">${col3}</span>
+            ${deltaSpan(r.delta)}
+          </div>`;
+        }).join("");
+    holder.innerHTML = chipsHtml + filterHtml + headerHtml + rowsHtml;
   }
 
   holder.querySelectorAll(".chip-label[data-src-idx]").forEach((btn) => {
@@ -354,6 +374,46 @@ function renderLbPanel(d) {
       renderLbPanel(state.lbData);
     });
   });
+  holder.querySelectorAll(".filter-chip[data-lbf]").forEach((b) => {
+    b.addEventListener("click", () => {
+      state.lbFilter[b.dataset.lbf] = b.dataset.v;
+      renderLbPanel(state.lbData);
+    });
+  });
+}
+
+// ── Panel 2·b · 公司榜（LMArena By Lab）──
+function renderCompaniesPanel(d) {
+  setUpdated("#u-companies", d.updated_at);
+  const holder = $("#p-companies");
+  holder.classList.remove("loading");
+  if (!d.items?.length) {
+    holder.innerHTML = `<div class="empty">暂无公司榜数据</div>`;
+    return;
+  }
+  const headerLink = d.url
+    ? `<a class="lb-jump" href="${esc(d.url)}" target="_blank" rel="noopener" title="去 LMArena By Lab">↗</a>`
+    : "";
+  const headerRow = `
+    <div class="lb-row lb-header">
+      <span class="rank">#</span>
+      <span class="name">公司 / Lab ${headerLink}</span>
+      <span class="score">评分</span>
+      <span class="delta">Δ</span>
+    </div>`;
+  const rows = d.items.map((r) => {
+    const scoreRaw = r.score;
+    const scoreText = scoreRaw == null ? "—"
+      : (typeof scoreRaw === "number" ? scoreRaw.toFixed(0) : String(scoreRaw));
+    return `
+      <div class="lb-row">
+        <span class="rank">#${r.rank}</span>
+        <span class="name" title="${esc(r.model_name)}">${esc(r.model_name)}</span>
+        <span class="score">${esc(scoreText)}</span>
+        ${deltaSpan(r.delta)}
+      </div>`;
+  }).join("");
+  holder.innerHTML = headerRow + rows;
 }
 
 // ── Panel 3 · HuggingFace ──
@@ -493,6 +553,7 @@ async function loadDashboard() {
   renderAlertBar(d.alerts);
   renderReleasesPanel(d.releases);
   renderLbPanel(d.leaderboards);
+  renderCompaniesPanel(d.companies);
   renderHfPanel(d.hf);
   renderOrPanel(d.openrouter);
   renderOpinionsPanel(d.opinions);

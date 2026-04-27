@@ -499,6 +499,22 @@ def _panel_openrouter(conn) -> dict:
     }
 
 
+def _panel_companies(conn) -> dict:
+    """LMArena By-Lab 榜单 — 按公司聚合的 Top 25。
+
+    数据复用 leaderboard_snapshots：scrape_lmarena 把 'text-by-labs' 这条 category
+    改名 safe_name='text_by_labs' 写库，model_name 列存的是公司/lab 名称。
+    """
+    payload = _gather_source_items(conn, "lmarena", "text_by_labs", limit=25)
+    return {
+        "updated_at": _last_success(conn, "leaderboard"),
+        "scraped_at": payload["scraped_at"],
+        "prev_scraped_at": payload["prev_scraped_at"],
+        "items": payload["items"],
+        "url": _SRC_HOME.get("lmarena"),
+    }
+
+
 def _panel_digest(conn, kind: str, window_days: int = 7) -> dict:
     row = conn.execute(
         "SELECT payload_json, generated_at FROM digest_cache WHERE kind=? AND window_days=?",
@@ -521,6 +537,7 @@ def dashboard():
             "alerts":       _panel_alerts(conn),
             "releases":     _panel_releases(conn),
             "leaderboards": _panel_leaderboards(conn),
+            "companies":    _panel_companies(conn),
             "hf":           _panel_hf(conn),
             "openrouter":   _panel_openrouter(conn),
             "opinions":     _panel_digest(conn, "opinions"),

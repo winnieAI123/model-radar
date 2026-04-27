@@ -57,7 +57,7 @@ def scrape_lmarena() -> dict[str, list[dict]]:
     all_data = {}
     for category, cat_info in categories.items():
         try:
-            url = f"{base_url}/{category}"
+            url = f"{base_url}/{cat_info.get('url_path', category)}"
             logger.info("[LM] 请求 %s", url)
             html = _fetch_lmarena_category(url)
 
