@@ -448,6 +448,9 @@ def _gather_source_items(conn, source: str, category: str, limit: int = 10) -> d
             "delta": delta,
             "price_per_1m_tokens": extra.get("price_per_1m_tokens"),
             "context_length": extra.get("context_length"),
+            # AA RSC payload 自带 is_open_weights（vals.openWeightsUrl is not None）；
+            # lmarena/superclue 行不带此字段，前端 fallback 到 OPENNESS_PATTERNS regex。
+            "is_open_weights": extra.get("is_open_weights"),
         })
     return {"scraped_at": latest_ts, "prev_scraped_at": prev_ts, "items": items}
 

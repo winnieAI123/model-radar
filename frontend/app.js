@@ -80,13 +80,19 @@ const OPENNESS_PATTERNS = [
   // [\s.\-\d]* 允许 flux 和子款式之间混合数字 / 点 / 空格 / 连字符（如 FLUX.1-dev / FLUX 1.1 Pro）
   { re: /\bflux[\s.\-\d]*(?:dev|schnell|klein)\b/i, v: "open" },
   { re: /\bflux[\s.\-\d]*(?:pro|max|ultra|kontext[\s.\-]*pro)\b/i, v: "closed" },
-  // Qwen3-Max 闭源（其它 Qwen 开源，放下面）
-  { re: /\bqwen3?[\s.\-]*max\b/i, v: "closed" },
+  // Qwen-Max / Qwen3-Max / Qwen3.5-Max 闭源（其它 Qwen 开源，放下面）
+  // 用 [\s.\-\d]* 兼容 qwen3.5-max-preview 这种带次版本号的形式
+  { re: /\bqwen[\s.\-\d]*max\b/i, v: "closed" },
   // Mistral Large 闭源（其它 Mistral/Mixtral 开源）
   { re: /\bmistral[\s.\-]*large\b/i, v: "closed" },
 
   // gpt-oss 是 OpenAI 的开源权重模型，必须先于下面的 gpt 闭源 pattern 命中
   { re: /\bgpt[\s.\-]?oss\b/i, v: "open" },
+
+  // LMArena 把测试中的闭源模型用化名挂榜单（dola-seed-2.0-pro 实为 ByteDance Doubao；
+  // muse-spark 为某 lab 的 stealth 模型）。等 AA 也覆盖这些时可以删除这两条。
+  { re: /\bdola[\s.\-]?seed\b/i, v: "closed" },
+  { re: /\bmuse[\s.\-]?spark\b/i, v: "closed" },
 
   // 开源模型
   { re: /\b(?:deepseek|kimi[\s.\-]*k?\d+|glm[\s.\-]*\d|qwen[\s\-.]?(?:\d|image|coder|audio|math|vl|qwq)|qwq|yi[\s.\-]*\d|llama[\s.\-]*\d?|mistral|mixtral|hunyuan|wan[\s.\-]*[0-9v]|cogvideox|open[\s.\-]?sora|ltx[\s.\-]?video|mochi|skyreels|bagel|hidream|stable[\s.\-]?diffusion|sdxl|sd[\s.\-]?\d|step[\s.\-]*\d|minimax[\s.\-]?m\d|internlm|baichuan|phi[\s.\-]*\d|nemotron|mimo[\s.\-]?v?\d|ling[\s.\-]?\d)/i, v: "open" },
@@ -117,6 +123,14 @@ function opennessChip(v) {
   if (v === "open")   return ` <span class="tag-chip tag-open-open" style="margin-left:6px">开</span>`;
   if (v === "closed") return ` <span class="tag-chip tag-open-closed" style="margin-left:6px">闭</span>`;
   return "";
+}
+
+// 榜单行的开/闭源判定：AA 行带 is_open_weights 权威标签（来自 artificialanalysis.ai
+// 的 openWeightsUrl 字段），优先用。lmarena/superclue 行无此字段，fallback 到名字 regex。
+function lbRowOpenness(r) {
+  if (r.is_open_weights === true)  return "open";
+  if (r.is_open_weights === false) return "closed";
+  return opennessByName(r.model_name);
 }
 
 // 通用 openness filter 渲染 + 行筛选辅助
@@ -230,7 +244,7 @@ function renderLbPanel(d) {
     // 开/闭源过滤：'all' 不过滤；'open'/'closed' 时 unknown 模型一并隐藏（避免误归类）
     const filtered = src.items.filter((r) => {
       if (state.lbFilter.openness === "all") return true;
-      return opennessByName(r.model_name) === state.lbFilter.openness;
+      return lbRowOpenness(r) === state.lbFilter.openness;
     });
     const rowsHtml = filtered.length === 0
       ? `<div class="empty" style="padding:18px">当前过滤下无匹配项</div>`
@@ -242,7 +256,7 @@ function renderLbPanel(d) {
           const col3 = showPrice
             ? (r.price_per_1m_tokens ? esc(r.price_per_1m_tokens) : "—")
             : esc(scoreText);
-          const op = opennessByName(r.model_name);
+          const op = lbRowOpenness(r);
           const opChip = op ? `<span class="tag-chip tag-open-${op}" style="margin-left:6px">${op === 'open' ? '开' : '闭'}</span>` : "";
           return `
           <div class="lb-row">
