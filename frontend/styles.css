@@ -218,12 +218,7 @@ a:hover { text-decoration: underline; }
   font-family: var(--serif); font-size: 14px;
   color: var(--accent); font-weight: 400; letter-spacing: 0.08em;
 }
-.panel-head .kicker {
-  font-family: var(--sans); font-size: 10px;
-  color: var(--faint); font-weight: 400;
-  letter-spacing: 0.22em; text-transform: uppercase;
-  margin-left: 6px; white-space: nowrap;
-}
+.panel-head .kicker { display: none; }
 .panel-updated {
   font-family: var(--sans); color: var(--faint);
   font-size: 10px; letter-spacing: 0.1em;
