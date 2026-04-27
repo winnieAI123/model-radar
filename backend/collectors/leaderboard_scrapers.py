@@ -69,7 +69,7 @@ def scrape_lmarena() -> dict[str, list[dict]]:
             rows = table.find("tbody").find_all("tr")
             # labs 榜列布局完全不同（Lab Rank / Lab / Model Score / Model Rank / Rank Spread），
             # 不能复用 per-model parser；走专用解析。
-            if category == "text-by-labs":
+            if category.endswith("-by-labs"):
                 results = _parse_lmarena_labs_rows(rows)
             else:
                 results = _parse_lmarena_model_rows(rows, cat_info)

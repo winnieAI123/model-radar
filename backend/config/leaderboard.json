@@ -7,7 +7,11 @@
         "text-to-image": {"cols": 5, "label": "Text-to-Image（文生图）"},
         "text-to-video": {"cols": 5, "label": "Text-to-Video（文生视频）"},
         "image-to-video": {"cols": 5, "label": "Image-to-Video（图生视频）"},
-        "text-by-labs": {"cols": 5, "label": "Text · By Lab（公司榜）", "url_path": "text?rankBy=labs"}
+        "text-by-labs": {"cols": 5, "label": "Text · By Lab（公司榜）", "url_path": "text?rankBy=labs"},
+        "code-by-labs": {"cols": 5, "label": "Code · By Lab（公司榜）", "url_path": "code?rankBy=labs"},
+        "text-to-image-by-labs": {"cols": 5, "label": "Text-to-Image · By Lab（公司榜）", "url_path": "text-to-image?rankBy=labs"},
+        "text-to-video-by-labs": {"cols": 5, "label": "Text-to-Video · By Lab（公司榜）", "url_path": "text-to-video?rankBy=labs"},
+        "image-to-video-by-labs": {"cols": 5, "label": "Image-to-Video · By Lab（公司榜）", "url_path": "image-to-video?rankBy=labs"}
       }
     },
     "artificial_analysis": {

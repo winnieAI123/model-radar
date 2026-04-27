@@ -7,6 +7,8 @@ const state = {
   lbSource: 0,                        // 当前 tab 下的 source 索引
   lbData: null,                       // 缓存最近一次 dashboard.leaderboards
   lbFilter: { openness: "all" },      // 模型榜的开/闭源过滤
+  companiesTab: "llm",                // 公司榜 tab：llm | code | t2i | t2v | i2v
+  companiesData: null,                // 缓存最近一次 dashboard.companies
   alertFilter: { modality: "all", openness: "all" },  // 关键信号 panel 过滤器
   alertData: null,                    // 缓存最近一次 dashboard.alerts 用于客户端过滤
   prevAlertIds: null,                 // 上一次渲染的事件 id 集合；用于算"新增"条数
@@ -382,38 +384,69 @@ function renderLbPanel(d) {
   });
 }
 
-// ── Panel 2·b · 公司榜（LMArena By Lab）──
+// ── Panel 2·b · 公司榜（LMArena By Lab，5 tabs）──
 function renderCompaniesPanel(d) {
   setUpdated("#u-companies", d.updated_at);
+  state.companiesData = d;
   const holder = $("#p-companies");
   holder.classList.remove("loading");
-  if (!d.items?.length) {
+  const tabs = d.tabs || [];
+  if (!tabs.length) {
     holder.innerHTML = `<div class="empty">暂无公司榜数据</div>`;
     return;
   }
-  const headerLink = d.url
-    ? `<a class="lb-jump" href="${esc(d.url)}" target="_blank" rel="noopener" title="去 LMArena By Lab">↗</a>`
-    : "";
+  // 找当前 tab；找不到（首次或 tab 被下线）回落第一个有数据的
+  let activeIdx = tabs.findIndex((t) => t.key === state.companiesTab);
+  if (activeIdx < 0) {
+    activeIdx = tabs.findIndex((t) => (t.items || []).length > 0);
+    if (activeIdx < 0) activeIdx = 0;
+    state.companiesTab = tabs[activeIdx].key;
+  }
+  const active = tabs[activeIdx];
+
+  const chips = tabs.map((t) => {
+    const isActive = t.key === state.companiesTab ? "active" : "";
+    const hasData = (t.items || []).length > 0;
+    const jump = t.url
+      ? `<a class="lb-jump" href="${esc(t.url)}" target="_blank" rel="noopener" title="去 ${esc(t.label)}">↗</a>`
+      : "";
+    return `<span class="lb-source-chip ${isActive}${hasData ? "" : " empty"}">
+      <button type="button" class="chip-label" data-comp-tab="${esc(t.key)}">${esc(t.label)}${hasData ? "" : " · 无"}</button>
+      ${jump}
+    </span>`;
+  }).join("");
+  const chipsHtml = `<div class="lb-source-row">${chips}</div>`;
+
   const headerRow = `
     <div class="lb-row lb-header">
       <span class="rank">#</span>
-      <span class="name">公司 / Lab ${headerLink}</span>
+      <span class="name">公司 / Lab</span>
       <span class="score">评分</span>
       <span class="delta">Δ</span>
     </div>`;
-  const rows = d.items.map((r) => {
-    const scoreRaw = r.score;
-    const scoreText = scoreRaw == null ? "—"
-      : (typeof scoreRaw === "number" ? scoreRaw.toFixed(0) : String(scoreRaw));
-    return `
-      <div class="lb-row">
-        <span class="rank">#${r.rank}</span>
-        <span class="name" title="${esc(r.model_name)}">${esc(r.model_name)}</span>
-        <span class="score">${esc(scoreText)}</span>
-        ${deltaSpan(r.delta)}
-      </div>`;
-  }).join("");
-  holder.innerHTML = headerRow + rows;
+  const items = active.items || [];
+  const rowsHtml = items.length === 0
+    ? `<div class="empty" style="padding:18px">该类目暂无数据</div>`
+    : items.map((r) => {
+        const scoreRaw = r.score;
+        const scoreText = scoreRaw == null ? "—"
+          : (typeof scoreRaw === "number" ? scoreRaw.toFixed(0) : String(scoreRaw));
+        return `
+          <div class="lb-row">
+            <span class="rank">#${r.rank}</span>
+            <span class="name" title="${esc(r.model_name)}">${esc(r.model_name)}</span>
+            <span class="score">${esc(scoreText)}</span>
+            ${deltaSpan(r.delta)}
+          </div>`;
+      }).join("");
+  holder.innerHTML = chipsHtml + (items.length ? headerRow : "") + rowsHtml;
+
+  holder.querySelectorAll(".chip-label[data-comp-tab]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.companiesTab = btn.dataset.compTab;
+      renderCompaniesPanel(state.companiesData);
+    });
+  });
 }
 
 // ── Panel 3 · HuggingFace ──

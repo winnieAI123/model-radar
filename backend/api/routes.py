@@ -15,10 +15,38 @@ router = APIRouter(prefix="/api", dependencies=[Depends(require_auth)])
 # 主 4 tab 覆盖 LLM / 文生图 / 文生视频 / 图生视频。"更多" tab 收 SuperCLUE 独有中文特色榜。
 _SRC_LABEL = {"lmarena": "LMArena", "aa": "AA", "superclue": "SuperCLUE"}
 _SRC_HOME = {
-    "lmarena":   "https://lmarena.ai/leaderboard",
+    "lmarena":   "https://arena.ai/leaderboard",
     "aa":        "https://artificialanalysis.ai/leaderboards/models",
     "superclue": "https://www.superclueai.com/",
 }
+
+# 跳转到原站时尽量落到对应"子榜单"的 deep link，而不是品牌主页。
+# 缺失的 (source, category) 自动降级到 _SRC_HOME[source]。
+_LB_PUBLIC_URL: dict[tuple[str, str], str] = {
+    # LMArena
+    ("lmarena", "text"):           "https://arena.ai/leaderboard/text",
+    ("lmarena", "text_to_image"):  "https://arena.ai/leaderboard/text-to-image",
+    ("lmarena", "text_to_video"):  "https://arena.ai/leaderboard/text-to-video",
+    ("lmarena", "image_to_video"): "https://arena.ai/leaderboard/image-to-video",
+    ("lmarena", "text_by_labs"):           "https://arena.ai/leaderboard/text?rankBy=labs",
+    ("lmarena", "code_by_labs"):           "https://arena.ai/leaderboard/code?rankBy=labs",
+    ("lmarena", "text_to_image_by_labs"):  "https://arena.ai/leaderboard/text-to-image?rankBy=labs",
+    ("lmarena", "text_to_video_by_labs"):  "https://arena.ai/leaderboard/text-to-video?rankBy=labs",
+    ("lmarena", "image_to_video_by_labs"): "https://arena.ai/leaderboard/image-to-video?rankBy=labs",
+    # ArtificialAnalysis
+    ("aa", "text_to_image"):       "https://artificialanalysis.ai/image/leaderboard/text-to-image",
+    ("aa", "text_to_video"):       "https://artificialanalysis.ai/video/leaderboard/text-to-video",
+    ("aa", "image_to_video"):      "https://artificialanalysis.ai/video/leaderboard/image-to-video",
+    # SuperCLUE
+    ("superclue", "text_to_image"):  "https://www.superclueai.com/arena?type=image&tab=t2iboard",
+    ("superclue", "text_to_video"):  "https://www.superclueai.com/arena?type=video&tab=board",
+    ("superclue", "image_to_video"): "https://www.superclueai.com/arena?type=video&tab=image2videoboard",
+}
+
+
+def _lb_url(source: str, category: str) -> str | None:
+    """优先精确子榜单 URL，否则降级品牌主页。"""
+    return _LB_PUBLIC_URL.get((source, category)) or _SRC_HOME.get(source)
 
 _LB_TABS: dict[str, dict] = {
     "llm": {
@@ -435,7 +463,7 @@ def _panel_leaderboards(conn) -> dict:
                 "source":   s["source"],
                 "category": s["category"],
                 "label":    s["label"],
-                "url":      _SRC_HOME.get(s["source"]),
+                "url":      _lb_url(s["source"], s["category"]),
                 "scraped_at":      payload["scraped_at"],
                 "prev_scraped_at": payload["prev_scraped_at"],
                 "items":    payload["items"],
@@ -499,19 +527,36 @@ def _panel_openrouter(conn) -> dict:
     }
 
 
-def _panel_companies(conn) -> dict:
-    """LMArena By-Lab 榜单 — 按公司聚合的 Top 25。
+_COMPANY_TABS: list[dict] = [
+    {"key": "llm",  "category": "text_by_labs",            "label": "LLM"},
+    {"key": "code", "category": "code_by_labs",            "label": "Code"},
+    {"key": "t2i",  "category": "text_to_image_by_labs",   "label": "文生图"},
+    {"key": "t2v",  "category": "text_to_video_by_labs",   "label": "文生视频"},
+    {"key": "i2v",  "category": "image_to_video_by_labs",  "label": "图生视频"},
+]
 
-    数据复用 leaderboard_snapshots：scrape_lmarena 把 'text-by-labs' 这条 category
-    改名 safe_name='text_by_labs' 写库，model_name 列存的是公司/lab 名称。
+
+def _panel_companies(conn) -> dict:
+    """LMArena By-Lab 榜单 — 5 个 tab，按 (text/code/t2i/t2v/i2v) × 公司聚合。
+
+    数据复用 leaderboard_snapshots：scrape_lmarena 把 'xxx-by-labs' category 落库时
+    把短横线换成下划线（safe_name='xxx_by_labs'），model_name 列存的是公司/lab 名称。
     """
-    payload = _gather_source_items(conn, "lmarena", "text_by_labs", limit=25)
+    tabs_out = []
+    for tab in _COMPANY_TABS:
+        payload = _gather_source_items(conn, "lmarena", tab["category"], limit=25)
+        tabs_out.append({
+            "key":      tab["key"],
+            "label":    tab["label"],
+            "category": tab["category"],
+            "url":      _lb_url("lmarena", tab["category"]),
+            "scraped_at":      payload["scraped_at"],
+            "prev_scraped_at": payload["prev_scraped_at"],
+            "items":    payload["items"],
+        })
     return {
         "updated_at": _last_success(conn, "leaderboard"),
-        "scraped_at": payload["scraped_at"],
-        "prev_scraped_at": payload["prev_scraped_at"],
-        "items": payload["items"],
-        "url": _SRC_HOME.get("lmarena"),
+        "tabs": tabs_out,
     }
 
 

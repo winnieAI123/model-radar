@@ -135,35 +135,37 @@ def _parse_rows(payload: str) -> list[dict]:
     return rows
 
 
-def _aggregate_latest_week(rows: list[dict]) -> tuple[str, list[dict]]:
-    """找到最新日期，聚合同一 permaslug 的多个 variant（免费版 + 标准版合并）。"""
+def _aggregate_latest_week(rows: list[dict]) -> tuple[str, list[tuple[str, str, dict]]]:
+    """找到最新日期，按 (permaslug, variant) 聚合。
+
+    历史上这里把 free + standard 合并，但 openrouter.ai/rankings 页面是把它们当独立条目排序的，
+    合并后我们的 #8 (MiniMax M2.5 = 633.8B standard + 89.6B free = 723.5B) 跟网站的 #8
+    (Step 3.5 Flash, 722.1B 单一 variant) 直接错位。改成 (slug, variant) 单独排序对齐网站。
+    """
     if not rows:
         return "", []
     # OR 的 date 是 "2026-04-21 00:00:00"，每周一采样一次
     latest_date = max(r["date"] for r in rows)
     latest = [r for r in rows if r["date"] == latest_date]
 
-    agg = defaultdict(lambda: {
+    agg: dict[tuple[str, str], dict] = defaultdict(lambda: {
         "completion": 0, "prompt": 0, "reasoning": 0, "count": 0,
-        "change": None, "variants": [],
+        "change": None,
     })
     for r in latest:
-        slug = r["model_permaslug"]
-        a = agg[slug]
+        key = (r["model_permaslug"], r["variant"])
+        a = agg[key]
         a["completion"] += r["completion"]
         a["prompt"] += r["prompt"]
         a["reasoning"] += r["reasoning"]
         a["count"] += r["count"]
-        a["variants"].append(r["variant"])
-        # 取第一个非空 change（通常 standard variant 就有，free variant 可能 null）
         if a["change"] is None and r["change"] is not None:
             a["change"] = r["change"]
 
     # 对齐 openrouter.ai/rankings 页面的 "Tokens" 列：completion + prompt + reasoning。
-    # 早期版本只算 completion+prompt，对 reasoning 重的模型（如 xiaomi/mimo）会偏低，和 OR 官方名次差 1 位。
     ranked = sorted(
-        [(slug, v) for slug, v in agg.items()],
-        key=lambda x: -(x[1]["completion"] + x[1]["prompt"] + x[1]["reasoning"]),
+        [(slug, variant, v) for (slug, variant), v in agg.items()],
+        key=lambda x: -(x[2]["completion"] + x[2]["prompt"] + x[2]["reasoning"]),
     )
     return latest_date, ranked
 
@@ -183,16 +185,26 @@ def _match_model(slug: str) -> str | None:
     return hits[0] if hits else None
 
 
-def _persist(conn, week_date: str, ranked: list[tuple[str, dict]],
+def _persist(conn, week_date: str, ranked: list[tuple[str, str, dict]],
              display_names: dict[str, str]) -> int:
-    """写 Top N 到 openrouter_rankings。同 week_date 的旧数据先清掉，避免 redeploy 累积重复快照。"""
+    """写 Top N 到 openrouter_rankings。同 week_date 的旧数据先清掉，避免 redeploy 累积重复快照。
+
+    非 standard variant 在 permaslug 后缀 ":<variant>"，display_name 后缀 " (<variant>)"，
+    与 OR 网站的 "Model Name (free)" 显示对齐，且保证 (slug, variant) 在表里不冲突。
+    """
     conn.execute("DELETE FROM openrouter_rankings WHERE week_date=?", (week_date[:10],))
     inserted = 0
-    for rank, (slug, v) in enumerate(ranked[:TOP_N], start=1):
+    for rank, (slug, variant, v) in enumerate(ranked[:TOP_N], start=1):
         author = slug.split("/", 1)[0] if "/" in slug else None
         total = v["completion"] + v["prompt"] + v["reasoning"]
         matched = _match_model(slug)
-        display = display_names.get(slug)  # OR 官方 short_name；拿不到时留 NULL，前端降级到 slug
+        display_base = display_names.get(slug)
+        if variant and variant != "standard":
+            stored_slug = f"{slug}:{variant}"
+            display = (display_base + f" ({variant})") if display_base else None
+        else:
+            stored_slug = slug
+            display = display_base
         cur = conn.execute(
             """
             INSERT INTO openrouter_rankings
@@ -202,8 +214,8 @@ def _persist(conn, week_date: str, ranked: list[tuple[str, dict]],
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                week_date[:10],  # 只存日期部分
-                rank, slug, author,
+                week_date[:10],
+                rank, stored_slug, author,
                 total, v["completion"], v["prompt"], v["reasoning"],
                 v["count"], v["change"], matched, display,
             ),
@@ -227,8 +239,8 @@ def collect() -> dict:
 
         with get_conn() as conn:
             inserted = _persist(conn, week_date, ranked, display_names)
-            matched = sum(1 for _, v in ranked[:TOP_N] if _match_model(_) is not None)
-            display_hits = sum(1 for slug, _ in ranked[:TOP_N] if slug in display_names)
+            matched = sum(1 for slug, _, _ in ranked[:TOP_N] if _match_model(slug) is not None)
+            display_hits = sum(1 for slug, _, _ in ranked[:TOP_N] if slug in display_names)
 
         logger.info(
             "[OpenRouter] 周榜 %s: Top %d 写入 %d 条 · canonical=%d · display_name=%d",
