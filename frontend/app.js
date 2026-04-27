@@ -452,8 +452,12 @@ function renderCompaniesPanel(d) {
 // ── Panel 3 · HuggingFace ──
 function renderHfPanel(d) {
   setUpdated("#u-hf", d.updated_at);
-  const sect = (label, items) => {
-    if (!items?.length) return `<div class="hf-section-title">${label}</div><div class="empty" style="padding:16px">—</div>`;
+  const sect = (label, items, sectionUrl) => {
+    const jump = sectionUrl
+      ? `<a class="lb-jump" href="${esc(sectionUrl)}" target="_blank" rel="noopener" title="去 HuggingFace ${esc(label)}">↗</a>`
+      : "";
+    const head = `<div class="hf-section-title">${label} ${jump}</div>`;
+    if (!items?.length) return head + `<div class="empty" style="padding:16px">—</div>`;
     const rows = items.map((r) => {
       const href = r.model_id ? `https://huggingface.co/${r.model_id}` : null;
       const nameHtml = href
@@ -467,10 +471,12 @@ function renderHfPanel(d) {
         <span></span>
       </div>`;
     }).join("");
-    return `<div class="hf-section-title">${label}</div>${rows}`;
+    return head + rows;
   };
   $("#p-hf").classList.remove("loading");
-  $("#p-hf").innerHTML = sect("🔥 Trending", d.trending) + sect("⬇ Downloads", d.downloads);
+  $("#p-hf").innerHTML =
+    sect("🔥 Trending", d.trending, "https://huggingface.co/models?sort=trending") +
+    sect("⬇ Downloads", d.downloads, "https://huggingface.co/models?sort=downloads");
 }
 
 // ── Panel 4 · OpenRouter ──
