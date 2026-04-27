@@ -67,34 +67,12 @@ def scrape_lmarena() -> dict[str, list[dict]]:
                 raise RuntimeError(f"[{category}] 未找到排行榜表格")
 
             rows = table.find("tbody").find_all("tr")
-            results = []
-            for row in rows:
-                tds = row.find_all("td")
-                if len(tds) < cat_info["cols"]:
-                    continue
-
-                rank_spans = tds[1].find_all("span")
-                if len(rank_spans) >= 2:
-                    rank_lower = _safe_int(rank_spans[0].get_text(strip=True))
-                    rank_upper = _safe_int(rank_spans[1].get_text(strip=True))
-                else:
-                    raw = tds[1].get_text(strip=True)
-                    rank_lower = raw
-                    rank_upper = raw
-
-                score = tds[3].get_text(strip=True).replace("Preliminary", "").strip()
-                entry = {
-                    "rank": _safe_int(tds[0].get_text(strip=True)),
-                    "rank_lower": rank_lower,
-                    "rank_upper": rank_upper,
-                    "model": _parse_model_name(tds[2]),
-                    "score": score,
-                    "votes": _safe_int(tds[4].get_text(strip=True).replace(",", "")),
-                }
-                if cat_info["cols"] >= 7:
-                    entry["price_per_1m_tokens"] = tds[5].get_text(strip=True)
-                    entry["context_length"] = tds[6].get_text(strip=True)
-                results.append(entry)
+            # labs 榜列布局完全不同（Lab Rank / Lab / Model Score / Model Rank / Rank Spread），
+            # 不能复用 per-model parser；走专用解析。
+            if category == "text-by-labs":
+                results = _parse_lmarena_labs_rows(rows)
+            else:
+                results = _parse_lmarena_model_rows(rows, cat_info)
 
             safe_name = category.replace("-", "_")
             all_data[safe_name] = results
@@ -104,6 +82,82 @@ def scrape_lmarena() -> dict[str, list[dict]]:
             all_data[category.replace("-", "_")] = []
 
     return all_data
+
+
+def _parse_lmarena_model_rows(rows, cat_info) -> list[dict]:
+    results = []
+    for row in rows:
+        tds = row.find_all("td")
+        if len(tds) < cat_info["cols"]:
+            continue
+
+        rank_spans = tds[1].find_all("span")
+        if len(rank_spans) >= 2:
+            rank_lower = _safe_int(rank_spans[0].get_text(strip=True))
+            rank_upper = _safe_int(rank_spans[1].get_text(strip=True))
+        else:
+            raw = tds[1].get_text(strip=True)
+            rank_lower = raw
+            rank_upper = raw
+
+        score = tds[3].get_text(strip=True).replace("Preliminary", "").strip()
+        entry = {
+            "rank": _safe_int(tds[0].get_text(strip=True)),
+            "rank_lower": rank_lower,
+            "rank_upper": rank_upper,
+            "model": _parse_model_name(tds[2]),
+            "score": score,
+            "votes": _safe_int(tds[4].get_text(strip=True).replace(",", "")),
+        }
+        if cat_info["cols"] >= 7:
+            entry["price_per_1m_tokens"] = tds[5].get_text(strip=True)
+            entry["context_length"] = tds[6].get_text(strip=True)
+        results.append(entry)
+    return results
+
+
+def _parse_lmarena_labs_rows(rows) -> list[dict]:
+    """LMArena ?rankBy=labs 榜单专用 parser。
+
+    列布局：
+      td[0] Lab Rank        — "1"
+      td[1] Lab cell        — 多个 <span>：[lab_name, top_model_with_proprietary_tag]
+                              （用户给的 XPath：td[2]/div/div[2]/div/span title=Anthropic）
+      td[2] Model Score     — "1503 ±8"（顶级模型 Elo + 置信区间，可能含 "Preliminary"）
+      td[3] Model Rank      — 顶级模型在 per-model 榜的排名
+      td[4] Rank Spread     — "1 6" = 该 lab 模型在 per-model 榜上的排名跨度
+    """
+    results = []
+    for row in rows:
+        tds = row.find_all("td")
+        if len(tds) < 5:
+            continue
+        spans = tds[1].find_all("span")
+        if not spans:
+            continue
+        lab_name = spans[0].get_text(strip=True)
+        if not lab_name:
+            continue
+        top_model = spans[1].get_text(strip=True).replace("· Proprietary", "").strip() if len(spans) > 1 else ""
+
+        score_raw = tds[2].get_text(" ", strip=True).replace("Preliminary", "").strip()
+        # "1503 ±8" → 紧凑成 "1503±8"
+        score = re.sub(r"\s+", "", score_raw)
+
+        spread_text = tds[4].get_text(" ", strip=True)
+        spread_parts = spread_text.split()
+
+        results.append({
+            "rank": _safe_int(tds[0].get_text(strip=True)),
+            "model": lab_name,                          # 公司名落在 model 字段，便于复用 _persist
+            "score": score,                              # 顶级模型 Elo
+            "top_model": top_model,
+            "top_model_rank": _safe_int(tds[3].get_text(strip=True)),
+            "rank_spread": spread_text,
+            "rank_spread_min": _safe_int(spread_parts[0]) if len(spread_parts) >= 1 else None,
+            "rank_spread_max": _safe_int(spread_parts[-1]) if len(spread_parts) >= 1 else None,
+        })
+    return results
 
 
 # ============================================================
