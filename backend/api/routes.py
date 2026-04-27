@@ -425,12 +425,12 @@ def _gather_source_items(conn, source: str, category: str, limit: int = 10) -> d
 
 
 def _panel_leaderboards(conn) -> dict:
-    """5 个 tab，每个 tab 下 N 个 source 各取 Top 10 + Δ。"""
+    """5 个 tab，每个 tab 下 N 个 source 各取 Top 25 + Δ（前端面板内滚动）。"""
     categories: dict = {}
     for tab_key, tab_cfg in _LB_TABS.items():
         sources_out = []
         for s in tab_cfg["sources"]:
-            payload = _gather_source_items(conn, s["source"], s["category"], limit=10)
+            payload = _gather_source_items(conn, s["source"], s["category"], limit=25)
             sources_out.append({
                 "source":   s["source"],
                 "category": s["category"],
@@ -489,7 +489,7 @@ def _panel_openrouter(conn) -> dict:
     rows = conn.execute(
         "SELECT rank, model_permaslug, author, total_tokens, request_count, change_pct, "
         "       matched_model, display_name "
-        "FROM openrouter_rankings WHERE week_date=? AND scraped_at=? ORDER BY rank LIMIT 10",
+        "FROM openrouter_rankings WHERE week_date=? AND scraped_at=? ORDER BY rank LIMIT 25",
         (latest, last_scrape),
     ).fetchall()
     return {
