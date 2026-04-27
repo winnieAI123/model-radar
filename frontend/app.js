@@ -13,9 +13,6 @@ const state = {
   hfData: null,                       // 缓存最近一次 dashboard.hf
   orFilter: { openness: "all" },      // OpenRouter 周榜 开/闭源过滤
   orData: null,                       // 缓存最近一次 dashboard.openrouter
-  alertFilter: { modality: "all", openness: "all" },  // 关键信号 panel 过滤器
-  alertData: null,                    // 缓存最近一次 dashboard.alerts 用于客户端过滤
-  prevAlertIds: null,                 // 上一次渲染的事件 id 集合；用于算"新增"条数
 };
 
 async function jfetch(url, opts = {}) {
@@ -65,13 +62,8 @@ function setUpdated(sel, iso) {
   el.title = iso;
 }
 
-// ── Alerts 顶部横条 ──
+// ── 开源/闭源判定（HF / OR / 模型榜共用）──
 
-// 开/闭源 org 分类（兜底层）。榜单事件的 detail 里没有 org，必须靠 OPENNESS_PATTERNS 兜底。
-const CLOSED_ORGS = new Set([
-  "openai", "anthropic", "google", "google-deepmind", "deepmind",
-  "xai", "midjourney", "ideogram", "runway", "pika", "cohere",
-]);
 const OPEN_ORGS = new Set([
   "deepseek-ai", "deepseek", "moonshotai", "moonshot", "qwenlm", "qwen", "thudm", "z-ai", "meta-llama", "meta",
   "mistralai", "stepfun-ai", "stepfun", "minimax-ai", "minimax", "alibaba-nlp", "alibaba", "01-ai",
@@ -79,12 +71,6 @@ const OPEN_ORGS = new Set([
   // 通用开源贡献者 / 量化器：他们 host 的几乎都是开源模型的 fork / quant
   "nvidia", "xiaomi", "inclusionai", "ant-research",
   "unsloth", "bartowski", "mradermacher", "thebloke", "nousresearch", "lmsys", "lmsys-org",
-]);
-const CLOSED_BLOG_SOURCES = new Set([
-  "blog_openai", "blog_anthropic", "blog_google", "blog_xai", "blog_google_deepmind",
-]);
-const OPEN_BLOG_SOURCES = new Set([
-  "blog_deepseek", "blog_moonshot", "blog_qwen", "blog_meta",
 ]);
 
 // 模型名级开/闭源判定。按数组顺序匹配，先命中先赢。
@@ -142,144 +128,6 @@ function opennessFilterRow(currentValue, dataAttr) {
       <button class="filter-chip ${currentValue === 'open' ? 'active' : ''}" data-${dataAttr}="open">开源</button>
       <button class="filter-chip ${currentValue === 'closed' ? 'active' : ''}" data-${dataAttr}="closed">闭源</button>
     </div>`;
-}
-
-// 多模态兜底关键词（用在模型名里，没 category 时用）
-const MULTIMODAL_RE = /\b(image|video|audio|vision|multi[-\s]?modal|sora|veo[-\s]?\d|kling|flux|midjourney|ideogram|imagen|pika|runway|nano[-\s]?banana|dall[-\s]?e|hunyuan[-\s]?video|wan[-\s]?\d|seedream|seedance|gen[-\s]?[3-9])|混元视频|可灵|即梦/i;
-
-// 榜单/新模型事件 detail.category 直接权威：text/llm = 文本；其它 (text_to_image, text_to_video,
-// image_to_video, text_to_speech, image_edit …) = 多模态。这比靠模型名正则猜可靠得多，
-// 不会再出现「SkyReels V4」被判成文本的事。
-function modalityByCategory(detail) {
-  const cat = (detail?.category || "").toLowerCase();
-  if (!cat) return null;
-  if (cat === "text" || cat === "llm" || cat === "text_to_text") return "text";
-  return "multimodal";
-}
-
-function classifyAlert(e) {
-  const src = (e.source || "").toLowerCase();
-  const detail = e.detail || {};
-  const org = (detail.org || detail.owner || "").toLowerCase();
-  const text = `${e.model_name || ""} ${e.title || ""} ${detail.repo_name || ""}`;
-
-  // openness: 博客/公众号文章本身是评论文本，不是模型实体，不判断开源闭源
-  // （2026-04-24：小米 MiMo 测评公众号文被误挂"闭源"黄徽，用户反馈）
-  let openness = null;
-  if (e.event_type !== "new_blog_post") {
-    openness = opennessByName(text);
-    if (!openness) {
-      if (CLOSED_BLOG_SOURCES.has(src) || CLOSED_ORGS.has(org)) openness = "closed";
-      else if (OPEN_BLOG_SOURCES.has(src) || OPEN_ORGS.has(org) || src === "hf" || src === "github") openness = "open";
-    }
-  }
-
-  // modality: detail.category 优先（榜单事件权威），没 category 时才靠模型名正则。
-  const modality = modalityByCategory(detail) ?? (MULTIMODAL_RE.test(text) ? "multimodal" : "text");
-  return { modality, openness };
-}
-
-function alertMatchesFilter(e) {
-  const f = state.alertFilter;
-  const { modality, openness } = classifyAlert(e);
-  if (f.modality !== "all" && modality !== f.modality) return false;
-  // openness==null 的事件 openness filter 为 all 时通过，其他情况下不显示（避免误归类）
-  if (f.openness !== "all" && openness !== f.openness) return false;
-  return true;
-}
-
-// event_type → 语义徽标（不再用 P0/P1 告警级别，避免"事故感"）
-// rank_crowned / rank_change 额外加 highlight 整行深色高亮
-const EVENT_BADGE = {
-  rank_crowned:       { label: "登顶",   cls: "ev-crown" },
-  rank_change:        { label: "位次",   cls: "ev-rank"  },
-  new_model_on_board: { label: "上榜",   cls: "ev-board" },
-  new_release:        { label: "发布",   cls: "ev-release" },
-  new_repo:           { label: "仓库",   cls: "ev-repo" },
-  star_surge:         { label: "暴涨",   cls: "ev-star" },
-  new_blog_post:      { label: "博客",   cls: "ev-blog" },
-};
-const HIGHLIGHT_EVENTS = new Set(["rank_crowned", "rank_change"]);
-
-function renderAlertBar(alerts, { isRefresh = true } = {}) {
-  state.alertData = alerts;
-  const recentAll = alerts?.recent || [];
-  const bar = $("#alert-bar");
-  const badge = $("#alert-badge");
-
-  // "新消息" = 相比上一次刷新新增的事件数；首次刷新把全部当作新增。
-  // 纯内存对比，不记已读状态：下次刷新如没新事件 → 0 条，有新事件 → N 条。
-  // 仅在服务器数据刷新时重新计数；过滤 chip 点击触发的本地 re-render 不重算，
-  // 否则用户切 filter 就会看到徽标归零。
-  if (isRefresh) {
-    const currentIds = new Set(recentAll.map((e) => e.id));
-    const newCount = state.prevAlertIds === null
-      ? recentAll.length
-      : recentAll.filter((e) => !state.prevAlertIds.has(e.id)).length;
-    state.prevAlertIds = currentIds;
-    $("#alert-bar-count").textContent = newCount;
-    $("#alert-count").textContent = newCount;
-  }
-
-  if (recentAll.length === 0) {
-    bar.hidden = true;
-    badge.hidden = true;
-    return;
-  }
-  // 徽标/自动展开只在实际有新增时触发（或首次渲染）；过滤 chip 点击不改变展开状态
-  const displayedCount = parseInt($("#alert-bar-count").textContent) || 0;
-  bar.hidden = false;
-  badge.hidden = displayedCount === 0;
-  if (isRefresh && displayedCount > 0 && !bar.dataset.userToggled) bar.open = true;
-
-  const recent = recentAll.filter(alertMatchesFilter);
-  const f = state.alertFilter;
-  const filterRow = `
-    <div class="alert-filter-row">
-      <span class="filter-label">模态</span>
-      <button class="filter-chip ${f.modality === 'all' ? 'active' : ''}" data-f="modality" data-v="all">全部</button>
-      <button class="filter-chip ${f.modality === 'text' ? 'active' : ''}" data-f="modality" data-v="text">文本</button>
-      <button class="filter-chip ${f.modality === 'multimodal' ? 'active' : ''}" data-f="modality" data-v="multimodal">多模态</button>
-      <span class="filter-sep">·</span>
-      <span class="filter-label">开源</span>
-      <button class="filter-chip ${f.openness === 'all' ? 'active' : ''}" data-f="openness" data-v="all">全部</button>
-      <button class="filter-chip ${f.openness === 'open' ? 'active' : ''}" data-f="openness" data-v="open">开源</button>
-      <button class="filter-chip ${f.openness === 'closed' ? 'active' : ''}" data-f="openness" data-v="closed">闭源</button>
-    </div>`;
-
-  const itemsHtml = recent.length === 0
-    ? `<div class="empty" style="padding:20px">当前过滤下无匹配项</div>`
-    : recent.map((e) => {
-        const { modality, openness } = classifyAlert(e);
-        const link = e.detail?.url || e.detail?.html_url;
-        const titleHtml = link
-          ? `<a href="${esc(link)}" target="_blank" rel="noopener">${esc(e.title)}</a>`
-          : esc(e.title);
-        const modChip = `<span class="tag-chip tag-mod-${modality}">${modality === 'multimodal' ? '多模态' : '文本'}</span>`;
-        const openChip = openness ? `<span class="tag-chip tag-open-${openness}">${openness === 'open' ? '开源' : '闭源'}</span>` : "";
-        const b = EVENT_BADGE[e.event_type] || { label: e.event_type, cls: "ev-default" };
-        const evChip = `<span class="ev-chip ${b.cls}">${esc(b.label)}</span>`;
-        const highlight = HIGHLIGHT_EVENTS.has(e.event_type) ? " highlight" : "";
-        return `
-          <div class="alert-item${highlight}" data-id="${e.id}">
-            ${evChip}
-            <div>
-              <div class="alert-title">${titleHtml}</div>
-              <div class="alert-tags">${modChip}${openChip}</div>
-              <div class="meta-line">${esc(e.source)} · ${relTime(e.created_at)}</div>
-            </div>
-          </div>`;
-      }).join("");
-
-  $("#alert-list").innerHTML = filterRow + itemsHtml;
-
-  $("#alert-list").querySelectorAll(".filter-chip[data-f]").forEach((b) => {
-    b.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      state.alertFilter[b.dataset.f] = b.dataset.v;
-      renderAlertBar(state.alertData, { isRefresh: false });
-    });
-  });
 }
 
 // ── Panel 1 · 发布 ──
@@ -666,7 +514,6 @@ function renderThemesPanel(d) {
 // ── 顶层 loader ──
 async function loadDashboard() {
   const d = await jfetch("/api/dashboard");
-  renderAlertBar(d.alerts);
   renderReleasesPanel(d.releases);
   renderLbPanel(d.leaderboards);
   renderCompaniesPanel(d.companies);
@@ -829,11 +676,6 @@ document.querySelectorAll(".lb-tab").forEach((t) => {
     state.lbSource = 0;  // 换 tab 时回到第一个 source
     if (state.lbData) renderLbPanel(state.lbData);
   });
-});
-
-// 告警条用户手动关闭过一次，就不再自动展开
-$("#alert-bar").addEventListener("toggle", (ev) => {
-  ev.target.dataset.userToggled = "1";
 });
 
 // 折叠区 lazy load

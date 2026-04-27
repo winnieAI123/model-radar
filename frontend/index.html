@@ -16,7 +16,6 @@
     <span class="subtitle">The Live Edition</span>
   </div>
   <div class="meta">
-    <a id="alert-badge" href="#alert-bar" class="alert-badge" hidden>🔔 <span id="alert-count">0</span></a>
     <span id="last-update">—</span>
     <button id="refresh" class="btn">刷新</button>
   </div>
@@ -24,19 +23,11 @@
 
 <main class="container">
 
-  <details id="alert-bar" class="alert-bar" hidden>
-    <summary>
-      <span class="alert-summary-title">🚨 关键信号 · <span id="alert-bar-count">0</span> 条新消息</span>
-      <span class="hint">点击展开</span>
-    </summary>
-    <div id="alert-list" class="alert-list"></div>
-  </details>
-
   <!-- Row 1 · 首屏核心：发布 2fr + 榜单 1fr -->
   <section class="row row-1">
     <div class="panel panel-releases">
       <div class="panel-head">
-        <h2><span class="roman">§ I</span>新模型 / 开源发布<span class="kicker">New Releases</span></h2>
+        <h2><span class="roman">§ I</span>新模型 / 文章 / 推文发布<span class="kicker">New Releases</span></h2>
         <span class="panel-updated" id="u-releases">—</span>
       </div>
       <div id="p-releases" class="panel-body loading">加载中…</div>
