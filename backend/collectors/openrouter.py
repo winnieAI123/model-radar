@@ -201,7 +201,12 @@ def _persist(conn, week_date: str, ranked: list[tuple[str, str, dict]],
         display_base = display_names.get(slug)
         if variant and variant != "standard":
             stored_slug = f"{slug}:{variant}"
-            display = (display_base + f" ({variant})") if display_base else None
+            suffix = f" ({variant})"
+            # OR 自家 short_name 对"仅免费 variant"模型已经带 (free) 后缀，避免重复
+            if display_base and not display_base.endswith(suffix):
+                display = display_base + suffix
+            else:
+                display = display_base
         else:
             stored_slug = slug
             display = display_base
