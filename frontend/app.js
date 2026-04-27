@@ -9,6 +9,10 @@ const state = {
   lbFilter: { openness: "all" },      // 模型榜的开/闭源过滤
   companiesTab: "llm",                // 公司榜 tab：llm | code | t2i | t2v | i2v
   companiesData: null,                // 缓存最近一次 dashboard.companies
+  hfFilter: { openness: "all" },      // HF 看板 开/闭源过滤（同时作用于 Trending + Downloads）
+  hfData: null,                       // 缓存最近一次 dashboard.hf
+  orFilter: { openness: "all" },      // OpenRouter 周榜 开/闭源过滤
+  orData: null,                       // 缓存最近一次 dashboard.openrouter
   alertFilter: { modality: "all", openness: "all" },  // 关键信号 panel 过滤器
   alertData: null,                    // 缓存最近一次 dashboard.alerts 用于客户端过滤
   prevAlertIds: null,                 // 上一次渲染的事件 id 集合；用于算"新增"条数
@@ -69,9 +73,12 @@ const CLOSED_ORGS = new Set([
   "xai", "midjourney", "ideogram", "runway", "pika", "cohere",
 ]);
 const OPEN_ORGS = new Set([
-  "deepseek-ai", "moonshotai", "qwenlm", "thudm", "meta-llama",
-  "mistralai", "stepfun-ai", "minimax-ai", "alibaba-nlp", "01-ai",
+  "deepseek-ai", "deepseek", "moonshotai", "moonshot", "qwenlm", "qwen", "thudm", "z-ai", "meta-llama", "meta",
+  "mistralai", "stepfun-ai", "stepfun", "minimax-ai", "minimax", "alibaba-nlp", "alibaba", "01-ai",
   "baidu", "tencent", "xtuner", "internlm",
+  // 通用开源贡献者 / 量化器：他们 host 的几乎都是开源模型的 fork / quant
+  "nvidia", "xiaomi", "inclusionai", "ant-research",
+  "unsloth", "bartowski", "mradermacher", "thebloke", "nousresearch", "lmsys", "lmsys-org",
 ]);
 const CLOSED_BLOG_SOURCES = new Set([
   "blog_openai", "blog_anthropic", "blog_google", "blog_xai", "blog_google_deepmind",
@@ -92,8 +99,11 @@ const OPENNESS_PATTERNS = [
   // Mistral Large 闭源（其它 Mistral/Mixtral 开源）
   { re: /\bmistral[\s.\-]*large\b/i, v: "closed" },
 
+  // gpt-oss 是 OpenAI 的开源权重模型，必须先于下面的 gpt 闭源 pattern 命中
+  { re: /\bgpt[\s.\-]?oss\b/i, v: "open" },
+
   // 开源模型
-  { re: /\b(?:deepseek|kimi[\s.\-]*k?\d+|glm[\s.\-]*\d|qwen[\s\-.]?(?:\d|image|coder|audio|math|vl|qwq)|qwq|yi[\s.\-]*\d|llama[\s.\-]*\d?|mistral|mixtral|hunyuan|wan[\s.\-]*[0-9v]|cogvideox|open[\s.\-]?sora|ltx[\s.\-]?video|mochi|skyreels|bagel|hidream|stable[\s.\-]?diffusion|sdxl|sd[\s.\-]?\d|step[\s.\-]*\d|minimax[\s.\-]?m\d|internlm|baichuan|phi[\s.\-]*\d)/i, v: "open" },
+  { re: /\b(?:deepseek|kimi[\s.\-]*k?\d+|glm[\s.\-]*\d|qwen[\s\-.]?(?:\d|image|coder|audio|math|vl|qwq)|qwq|yi[\s.\-]*\d|llama[\s.\-]*\d?|mistral|mixtral|hunyuan|wan[\s.\-]*[0-9v]|cogvideox|open[\s.\-]?sora|ltx[\s.\-]?video|mochi|skyreels|bagel|hidream|stable[\s.\-]?diffusion|sdxl|sd[\s.\-]?\d|step[\s.\-]*\d|minimax[\s.\-]?m\d|internlm|baichuan|phi[\s.\-]*\d|nemotron|mimo[\s.\-]?v?\d|ling[\s.\-]?\d)/i, v: "open" },
 
   // 闭源模型
   { re: /\b(?:gpt[\s.\-]?[345]|gpt[\s.\-]?4[\w\-]*|chatgpt|o[1-4][\s.\-]?(?:mini|preview|pro)?|claude|gemini|nano[\s.\-]?banana|grok|nova[\s.\-]?(?:pro|lite|micro)?|titan|command[\s.\-]?[ra]?|doubao|ernie|文心|sora|veo[\s.\-]?\d?|kling|runway|pika|hailuo|pixverse|vidu|luma|ray[\s.\-]?\d|seedance|seedream|dreamina|marey|haiper|midjourney|ideogram|dall[\s.\-]?e|imagen|firefly|recraft|happy[\s.\-]?horse)|可灵|海螺|即梦/i, v: "closed" },
@@ -105,6 +115,33 @@ function opennessByName(text) {
     if (re.test(text)) return v;
   }
   return null;
+}
+
+// HF 全 id ("deepseek-ai/DeepSeek-V4-Pro") + OR slug 都用这个统一判定。
+// 优先 name regex（命中"gpt"/"claude"/"deepseek"等明确品牌）；
+// 没命中再用 author 做开源白名单兜底（不用 CLOSED_ORGS 兜底——HF 上 openai/whisper、google/gemma 都是开权重）。
+function modelOpenness(text, author) {
+  const v = opennessByName(text);
+  if (v) return v;
+  if (author && OPEN_ORGS.has(String(author).toLowerCase())) return "open";
+  return null;
+}
+
+function opennessChip(v) {
+  if (v === "open")   return ` <span class="tag-chip tag-open-open" style="margin-left:6px">开</span>`;
+  if (v === "closed") return ` <span class="tag-chip tag-open-closed" style="margin-left:6px">闭</span>`;
+  return "";
+}
+
+// 通用 openness filter 渲染 + 行筛选辅助
+function opennessFilterRow(currentValue, dataAttr) {
+  return `
+    <div class="alert-filter-row lb-filter-row">
+      <span class="filter-label">开源</span>
+      <button class="filter-chip ${currentValue === 'all' ? 'active' : ''}" data-${dataAttr}="all">全部</button>
+      <button class="filter-chip ${currentValue === 'open' ? 'active' : ''}" data-${dataAttr}="open">开源</button>
+      <button class="filter-chip ${currentValue === 'closed' ? 'active' : ''}" data-${dataAttr}="closed">闭源</button>
+    </div>`;
 }
 
 // 多模态兜底关键词（用在模型名里，没 category 时用）
@@ -452,17 +489,32 @@ function renderCompaniesPanel(d) {
 // ── Panel 3 · HuggingFace ──
 function renderHfPanel(d) {
   setUpdated("#u-hf", d.updated_at);
+  state.hfData = d;
+  const f = state.hfFilter.openness;
+  const filterHtml = opennessFilterRow(f, "hff");
+
   const sect = (label, items, sectionUrl) => {
     const jump = sectionUrl
       ? `<a class="lb-jump" href="${esc(sectionUrl)}" target="_blank" rel="noopener" title="去 HuggingFace ${esc(label)}">↗</a>`
       : "";
     const head = `<div class="hf-section-title">${label} ${jump}</div>`;
     if (!items?.length) return head + `<div class="empty" style="padding:16px">—</div>`;
-    const rows = items.map((r) => {
+    // openness 判定：HF 全 id 是 "author/Model-Name" 格式，author 直接做白名单兜底
+    const filtered = items.filter((r) => {
+      if (f === "all") return true;
+      const author = (r.author || (r.model_id || "").split("/")[0] || "").toLowerCase();
+      return modelOpenness(r.model_id || "", author) === f;
+    });
+    if (filtered.length === 0) {
+      return head + `<div class="empty" style="padding:14px">当前过滤下无匹配项</div>`;
+    }
+    const rows = filtered.map((r) => {
       const href = r.model_id ? `https://huggingface.co/${r.model_id}` : null;
+      const author = (r.author || (r.model_id || "").split("/")[0] || "").toLowerCase();
+      const op = modelOpenness(r.model_id || "", author);
       const nameHtml = href
-        ? `<a class="name" href="${esc(href)}" target="_blank" rel="noopener" title="${esc(r.model_id)}">${esc(r.model_id)}</a>`
-        : `<span class="name" title="${esc(r.model_id)}">${esc(r.model_id)}</span>`;
+        ? `<a class="name" href="${esc(href)}" target="_blank" rel="noopener" title="${esc(r.model_id)}">${esc(r.model_id)}${opennessChip(op)}</a>`
+        : `<span class="name" title="${esc(r.model_id)}">${esc(r.model_id)}${opennessChip(op)}</span>`;
       return `
       <div class="list-row">
         <span class="rank">#${r.rank}</span>
@@ -473,50 +525,75 @@ function renderHfPanel(d) {
     }).join("");
     return head + rows;
   };
-  $("#p-hf").classList.remove("loading");
-  $("#p-hf").innerHTML =
+  const holder = $("#p-hf");
+  holder.classList.remove("loading");
+  holder.innerHTML = filterHtml +
     sect("🔥 Trending", d.trending, "https://huggingface.co/models?sort=trending") +
     sect("⬇ Downloads", d.downloads, "https://huggingface.co/models?sort=downloads");
+
+  holder.querySelectorAll(".filter-chip[data-hff]").forEach((b) => {
+    b.addEventListener("click", () => {
+      state.hfFilter.openness = b.dataset.hff;
+      renderHfPanel(state.hfData);
+    });
+  });
 }
 
 // ── Panel 4 · OpenRouter ──
 function renderOrPanel(d) {
   setUpdated("#u-or", d.updated_at);
+  state.orData = d;
+  const holder = $("#p-or");
+  holder.classList.remove("loading");
   if (!d.items?.length) {
-    $("#p-or").classList.remove("loading");
-    $("#p-or").innerHTML = `<div class="empty">暂无数据</div>`;
+    holder.innerHTML = `<div class="empty">暂无数据</div>`;
     return;
   }
   const headerLink = `<a href="https://openrouter.ai/rankings" target="_blank" rel="noopener" class="jump-inline">↗ 去 OpenRouter</a>`;
   const header = `<div class="or-header">${d.week_date ? "周 · " + esc(d.week_date) : ""}${headerLink}</div>`;
-  const rows = d.items.map((r) => {
-    // 名字只用 OR 官方 short_name (display_name)；没有时直接显示 slug 原串。
-    // 不再回落到 matched_model —— 那是我们自家 alias 合并过的（如 M2.5/M2.7 都变 MiniMax-M2），失真。
-    const name = r.display_name || r.model_permaslug;
-    const tok = r.total_tokens ? `${(r.total_tokens/1e9).toFixed(1)}B tok` : "—";
-    // change_pct 是小数（0.03 = 3%），网站上是 0.03*100=3%，之前漏了 *100 把 0.03 直接 toFixed(0)=0 显示成了 "0%"。
-    const chgPct = r.change_pct != null ? (r.change_pct * 100) : null;
-    const chg = chgPct != null
-      ? (chgPct >= 0
-          ? `<span class="delta delta-up">+${chgPct.toFixed(0)}%</span>`
-          : `<span class="delta delta-down">${chgPct.toFixed(0)}%</span>`)
-      : `<span class="delta delta-flat">—</span>`;
-    const href = (r.author && r.model_permaslug)
-      ? `https://openrouter.ai/${r.author}/${r.model_permaslug}`
-      : null;
-    const nameHtml = href
-      ? `<a class="name" href="${esc(href)}" target="_blank" rel="noopener" title="${esc(name)}">${esc(name)}</a>`
-      : `<span class="name" title="${esc(name)}">${esc(name)}</span>`;
-    return `
-      <div class="list-row">
-        <span class="rank">#${r.rank}</span>
-        ${nameHtml}
-        <span class="score">${tok}</span>
-        ${chg}
-      </div>`;
-  }).join("");
-  $("#p-or").classList.remove("loading");
-  $("#p-or").innerHTML = header + rows;
+  const f = state.orFilter.openness;
+  const filterHtml = opennessFilterRow(f, "orf");
+
+  const filtered = d.items.filter((r) => {
+    if (f === "all") return true;
+    const text = (r.display_name || "") + " " + (r.model_permaslug || "");
+    return modelOpenness(text, r.author) === f;
+  });
+
+  const rowsHtml = filtered.length === 0
+    ? `<div class="empty" style="padding:18px">当前过滤下无匹配项</div>`
+    : filtered.map((r) => {
+        const name = r.display_name || r.model_permaslug;
+        const tok = r.total_tokens ? `${(r.total_tokens/1e9).toFixed(1)}B tok` : "—";
+        const chgPct = r.change_pct != null ? (r.change_pct * 100) : null;
+        const chg = chgPct != null
+          ? (chgPct >= 0
+              ? `<span class="delta delta-up">+${chgPct.toFixed(0)}%</span>`
+              : `<span class="delta delta-down">${chgPct.toFixed(0)}%</span>`)
+          : `<span class="delta delta-flat">—</span>`;
+        const href = (r.author && r.model_permaslug)
+          ? `https://openrouter.ai/${r.author}/${r.model_permaslug}`
+          : null;
+        const op = modelOpenness((name || "") + " " + (r.model_permaslug || ""), r.author);
+        const nameHtml = href
+          ? `<a class="name" href="${esc(href)}" target="_blank" rel="noopener" title="${esc(name)}">${esc(name)}${opennessChip(op)}</a>`
+          : `<span class="name" title="${esc(name)}">${esc(name)}${opennessChip(op)}</span>`;
+        return `
+          <div class="list-row">
+            <span class="rank">#${r.rank}</span>
+            ${nameHtml}
+            <span class="score">${tok}</span>
+            ${chg}
+          </div>`;
+      }).join("");
+  holder.innerHTML = header + filterHtml + rowsHtml;
+
+  holder.querySelectorAll(".filter-chip[data-orf]").forEach((b) => {
+    b.addEventListener("click", () => {
+      state.orFilter.openness = b.dataset.orf;
+      renderOrPanel(state.orData);
+    });
+  });
 }
 
 // ── Panel 5 · 社区声音 (opinions) ──
